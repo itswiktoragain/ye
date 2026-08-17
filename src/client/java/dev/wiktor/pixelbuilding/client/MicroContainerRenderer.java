@@ -67,7 +67,7 @@ public final class MicroContainerRenderer implements BlockEntityRenderer<MicroCo
             if (materialId == null) continue;
             Block block = BuiltInRegistries.BLOCK.getValue(PixelBuilding.parseId(materialId));
             if (block == Blocks.AIR) continue;
-            BlockStateModel model = Minecraft.getInstance().getBlockRenderer().getBlockModel(block.defaultBlockState());
+            BlockStateModel model = Minecraft.getInstance().getModelManager().getBlockStateModel(block.defaultBlockState());
             Material.Baked material = model.particleMaterial();
             if (!occupied(level, be.getBlockPos(), x, y - 1, z)) emitFace(emitter, Direction.DOWN, x, y, z, material);
             if (!occupied(level, be.getBlockPos(), x, y + 1, z)) emitFace(emitter, Direction.UP, x, y, z, material);
