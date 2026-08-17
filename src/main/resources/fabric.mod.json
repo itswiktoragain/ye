@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "pixelbuilding",
+  "version": "${version}",
+  "name": "Pixel Building",
+  "description": "Build with 1/16-block voxels in a 16x16x16 grid.",
+  "authors": ["Wiktor"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["dev.wiktor.pixelbuilding.PixelBuilding"],
+    "client": ["dev.wiktor.pixelbuilding.client.PixelBuildingClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": ">=0.157.0+26.2",
+    "minecraft": "26.2",
+    "java": ">=25"
+  }
+}
