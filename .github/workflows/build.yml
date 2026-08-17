@@ -1,0 +1,128 @@
+name: Build Pixel Building
+
+on:
+  push:
+    branches:
+      - agent/pixel-building-2
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle 9.5.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Build with Fabric Loom
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle build --stacktrace --warning-mode all 2>&1 | tee build.log
+
+      - name: Dedicated server initializer smoke test
+        shell: bash
+        run: |
+          rm -rf run
+          mkdir -p run
+          echo 'eula=true' > run/eula.txt
+          : > server-smoke.log
+          gradle runServer --no-daemon > server-smoke.log 2>&1 &
+          PID=$!
+          ok=0
+          for i in $(seq 1 90); do
+            if grep -q 'Pixel Building 2.0.0 initialized for Minecraft 26.2' server-smoke.log; then
+              ok=1
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          if [ "$ok" -ne 1 ]; then
+            cat server-smoke.log
+            exit 1
+          fi
+
+      - name: Headless client initializer smoke test
+        shell: bash
+        run: |
+          : > client-smoke.log
+          xvfb-run -a gradle runClient --no-daemon > client-smoke.log 2>&1 &
+          PID=$!
+          ok=0
+          for i in $(seq 1 120); do
+            if grep -q 'Pixel Building client initializer completed' client-smoke.log; then
+              ok=1
+              break
+            fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          if [ "$ok" -ne 1 ]; then
+            cat client-smoke.log
+            exit 1
+          fi
+
+      - name: Dump mapped Minecraft client APIs on failure
+        if: failure()
+        shell: bash
+        run: |
+          CP="$(gradle -q printClientClasspath | tail -n 1)"
+          {
+            echo '=== ModelManager ==='
+            javap -classpath "$CP" net.minecraft.client.resources.model.ModelManager
+            echo
+            echo '=== BlockStateModelSet ==='
+            javap -classpath "$CP" net.minecraft.client.renderer.block.BlockStateModelSet
+            echo
+            echo '=== BlockModelSet ==='
+            javap -classpath "$CP" net.minecraft.client.renderer.block.BlockModelSet
+            echo
+            echo '=== Minecraft ==='
+            javap -classpath "$CP" net.minecraft.client.Minecraft
+          } > api-dump.txt 2>&1 || true
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-building-build-log
+          path: |
+            build.log
+            server-smoke.log
+            client-smoke.log
+            api-dump.txt
+          if-no-files-found: warn
+
+      - name: Upload JARs
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel-building-build
+          path: build/libs/*.jar
+          if-no-files-found: error
