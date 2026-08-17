@@ -43,3 +43,9 @@ java {
     targetCompatibility = JavaVersion.VERSION_25
     withSourcesJar()
 }
+
+tasks.register('printClientClasspath') {
+    doLast {
+        println sourceSets.client.compileClasspath.asPath
+    }
+}
