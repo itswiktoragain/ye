@@ -37,12 +37,27 @@ jobs:
           set -o pipefail
           gradle build --stacktrace --warning-mode all 2>&1 | tee build.log
 
-      - name: Upload build log
+      - name: Dump mapped Minecraft client APIs on failure
+        if: failure()
+        shell: bash
+        run: |
+          CP="$(gradle -q printClientClasspath | tail -n 1)"
+          {
+            echo '=== ModelManager ==='
+            javap -classpath "$CP" net.minecraft.client.resources.model.ModelManager
+            echo
+            echo '=== Minecraft ==='
+            javap -classpath "$CP" net.minecraft.client.Minecraft
+          } > api-dump.txt 2>&1 || true
+
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pixel-building-build-log
-          path: build.log
+          path: |
+            build.log
+            api-dump.txt
           if-no-files-found: error
 
       - name: Upload JARs
