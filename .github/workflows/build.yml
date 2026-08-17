@@ -46,6 +46,12 @@ jobs:
             echo '=== ModelManager ==='
             javap -classpath "$CP" net.minecraft.client.resources.model.ModelManager
             echo
+            echo '=== BlockStateModelSet ==='
+            javap -classpath "$CP" net.minecraft.client.renderer.block.BlockStateModelSet
+            echo
+            echo '=== BlockModelSet ==='
+            javap -classpath "$CP" net.minecraft.client.renderer.block.BlockModelSet
+            echo
             echo '=== Minecraft ==='
             javap -classpath "$CP" net.minecraft.client.Minecraft
           } > api-dump.txt 2>&1 || true
