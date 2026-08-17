@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import org.lwjgl.glfw.GLFW;
 
 import dev.wiktor.pixelbuilding.ModContent;
+import dev.wiktor.pixelbuilding.PixelBuilding;
 import dev.wiktor.pixelbuilding.PixelModes;
 import dev.wiktor.pixelbuilding.TogglePixelModePayload;
 
@@ -41,5 +42,6 @@ public final class PixelBuildingClient implements ClientModInitializer {
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> PixelModes.clearClient());
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> PlacementPreview.close());
+        PixelBuilding.LOGGER.info("Pixel Building client initializer completed");
     }
 }
