@@ -1,6 +1,8 @@
 package com.daniel.localradio
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.telephony.TelephonyManager
@@ -8,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -24,13 +27,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,14 +73,43 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+
+private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10) LocalRadio/1.1"
+
+data class Station(
+    val uuid: String,
+    val name: String,
+    val streamUrls: List<String>,
+    val favicon: String,
+    val homepage: String,
+    val country: String,
+    val state: String,
+    val codec: String,
+    val bitrate: Int,
+    val tags: String,
+    val clickCount: Int,
+    val hls: Boolean
+) {
+    val streamUrl: String get() = streamUrls.first()
+    val key: String get() = uuid.ifBlank { streamUrl }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,20 +119,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-data class Station(
-    val uuid: String,
-    val name: String,
-    val streamUrl: String,
-    val country: String,
-    val state: String,
-    val codec: String,
-    val bitrate: Int,
-    val tags: String,
-    val clickCount: Int
-)
-
 private object StationRepository {
-    private val executor = Executors.newSingleThreadExecutor()
+    private val executor = Executors.newCachedThreadPool()
     private val hosts = listOf("de1.api.radio-browser.info", "nl1.api.radio-browser.info")
 
     fun loadPopular(countryCode: String, callback: (Result<List<Station>>) -> Unit) {
@@ -113,17 +133,18 @@ private object StationRepository {
                             "?order=clickcount&reverse=true&limit=100&hidebroken=true"
                     )
                     val connection = (url.openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 8000
-                        readTimeout = 12000
+                        connectTimeout = 5000
+                        readTimeout = 8000
                         requestMethod = "GET"
-                        setRequestProperty("User-Agent", "LocalRadio/1.0")
+                        setRequestProperty("User-Agent", USER_AGENT)
                         setRequestProperty("Accept", "application/json")
                     }
                     val responseCode = connection.responseCode
                     if (responseCode !in 200..299) error("Radio service returned $responseCode")
                     val body = connection.inputStream.bufferedReader().use { it.readText() }
-                    callback(Result.success(parseStations(body)))
+                    val parsed = parseStations(body)
                     connection.disconnect()
+                    callback(Result.success(parsed))
                     return@execute
                 } catch (t: Throwable) {
                     lastError = t
@@ -139,9 +160,9 @@ private object StationRepository {
             for (host in hosts) {
                 val succeeded = runCatching {
                     val connection = (URL("https://$host/json/url/$uuid").openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 4000
-                        readTimeout = 4000
-                        setRequestProperty("User-Agent", "LocalRadio/1.0")
+                        connectTimeout = 3000
+                        readTimeout = 3000
+                        setRequestProperty("User-Agent", USER_AGENT)
                     }
                     connection.inputStream.close()
                     connection.disconnect()
@@ -151,29 +172,153 @@ private object StationRepository {
         }
     }
 
+    fun resolvePlaylistUrls(urls: List<String>, callback: (List<String>) -> Unit) {
+        executor.execute {
+            val resolved = buildList {
+                for (url in urls.distinct()) {
+                    runCatching { resolvePlaylist(url) }.getOrNull()?.forEach { candidate ->
+                        if (candidate.startsWith("http://") || candidate.startsWith("https://")) add(candidate)
+                    }
+                }
+            }.distinct()
+            callback(resolved)
+        }
+    }
+
+    private fun resolvePlaylist(source: String): List<String> {
+        val connection = (URL(source).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 3500
+            readTimeout = 3500
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("Accept", "audio/x-mpegurl, audio/mpegurl, audio/x-scpls, text/plain, */*")
+            setRequestProperty("Range", "bytes=0-65535")
+        }
+        return try {
+            if (connection.responseCode !in 200..299) return emptyList()
+            val contentType = connection.contentType.orEmpty().lowercase(Locale.ROOT)
+            val lowerUrl = source.substringBefore('?').lowercase(Locale.ROOT)
+            val looksLikePlaylist = lowerUrl.endsWith(".m3u") || lowerUrl.endsWith(".pls") ||
+                contentType.contains("mpegurl") || contentType.contains("scpls") || contentType.contains("text/plain")
+            if (!looksLikePlaylist) return emptyList()
+
+            val bytes = ByteArrayOutputStream()
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(4096)
+                var remaining = 65536
+                while (remaining > 0) {
+                    val count = input.read(buffer, 0, minOf(buffer.size, remaining))
+                    if (count <= 0) break
+                    bytes.write(buffer, 0, count)
+                    remaining -= count
+                }
+            }
+            val text = bytes.toString(Charsets.UTF_8.name())
+            parsePlaylistText(source, text)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parsePlaylistText(baseUrl: String, text: String): List<String> {
+        return text.lineSequence()
+            .map { it.trim() }
+            .mapNotNull { line ->
+                val candidate = when {
+                    line.startsWith("File", ignoreCase = true) && '=' in line -> line.substringAfter('=').trim()
+                    line.isNotBlank() && !line.startsWith("#") && !line.startsWith("[") &&
+                        !line.contains('=') -> line
+                    else -> null
+                } ?: return@mapNotNull null
+                runCatching { URL(URL(baseUrl), candidate).toString() }.getOrNull()
+            }
+            .filter { it.startsWith("http://") || it.startsWith("https://") }
+            .distinct()
+            .take(8)
+            .toList()
+    }
+
     private fun parseStations(body: String): List<Station> {
         val array = JSONArray(body)
         return buildList {
             for (i in 0 until array.length()) {
                 val item = array.getJSONObject(i)
-                val stream = item.optString("url_resolved").ifBlank { item.optString("url") }
                 val name = item.optString("name").trim()
-                if (stream.isBlank() || name.isBlank()) continue
+                val urls = listOf(item.optString("url_resolved"), item.optString("url"))
+                    .map { normalizeHttpUrl(it) }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                if (urls.isEmpty() || name.isBlank()) continue
+
+                val homepage = normalizeHttpUrl(item.optString("homepage"))
+                val favicon = normalizeHttpUrl(item.optString("favicon")).ifBlank {
+                    runCatching {
+                        val page = URL(homepage)
+                        if (page.protocol == "http" || page.protocol == "https") {
+                            URL(page.protocol, page.host, page.port, "/favicon.ico").toString()
+                        } else ""
+                    }.getOrDefault("")
+                }
+
                 add(
                     Station(
                         uuid = item.optString("stationuuid"),
                         name = name,
-                        streamUrl = stream,
+                        streamUrls = urls,
+                        favicon = favicon,
+                        homepage = homepage,
                         country = item.optString("country"),
                         state = item.optString("state"),
                         codec = item.optString("codec"),
                         bitrate = item.optInt("bitrate"),
                         tags = item.optString("tags"),
-                        clickCount = item.optInt("clickcount")
+                        clickCount = item.optInt("clickcount"),
+                        hls = item.optInt("hls") == 1
                     )
                 )
             }
-        }.distinctBy { it.uuid.ifBlank { it.streamUrl } }
+        }.distinctBy { it.key }
+    }
+
+    private fun normalizeHttpUrl(raw: String): String {
+        val value = raw.trim()
+        return when {
+            value.startsWith("//") -> "https:$value"
+            value.startsWith("http://") || value.startsWith("https://") -> value
+            else -> ""
+        }
+    }
+}
+
+private object ArtworkCache {
+    private val cache = ConcurrentHashMap<String, Bitmap>()
+
+    fun get(url: String): Bitmap? = cache[url]
+
+    suspend fun load(url: String): Bitmap? {
+        if (url.isBlank()) return null
+        cache[url]?.let { return it }
+        val bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 3000
+                    readTimeout = 4000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", USER_AGENT)
+                    setRequestProperty("Accept", "image/*,*/*;q=0.8")
+                }
+                try {
+                    if (connection.responseCode !in 200..299) return@runCatching null
+                    val contentLength = connection.contentLengthLong
+                    if (contentLength > 3_000_000L) return@runCatching null
+                    connection.inputStream.use { BitmapFactory.decodeStream(it) }
+                } finally {
+                    connection.disconnect()
+                }
+            }.getOrNull()
+        }
+        if (bitmap != null) cache[url] = bitmap
+        return bitmap
     }
 }
 
@@ -204,6 +349,10 @@ private fun RadioScreen() {
     var currentStation by remember { mutableStateOf<Station?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    var playbackStatus by remember { mutableStateOf("Paused") }
+    var playbackUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var playbackIndex by remember { mutableStateOf(0) }
+    var playlistRecoveryTried by remember { mutableStateOf(false) }
 
     val countryCode = remember { detectCountryCode(context) }
     val countryName = remember(countryCode) {
@@ -211,24 +360,102 @@ private fun RadioScreen() {
     }
 
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .setUsage(C.USAGE_MEDIA)
-                    .build(),
-                true
+        val httpFactory = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(4500)
+            .setReadTimeoutMs(8000)
+            .setAllowCrossProtocolRedirects(true)
+            .setUserAgent(USER_AGENT)
+        val mediaSourceFactory = DefaultMediaSourceFactory(context)
+            .setDataSourceFactory(httpFactory)
+            .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(1))
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                1_000,
+                12_000,
+                250,
+                500
             )
-            addListener(object : Player.Listener {
-                override fun onIsPlayingChanged(value: Boolean) {
-                    isPlaying = value
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
+            .build()
+            .apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                        .setUsage(C.USAGE_MEDIA)
+                        .build(),
+                    true
+                )
+            }
+    }
+
+    fun playUrl(station: Station, url: String, status: String) {
+        playerError = null
+        playbackStatus = status
+        val lowerUrl = url.substringBefore('?').lowercase(Locale.ROOT)
+        val builder = MediaItem.Builder().setUri(url)
+        if (station.hls || lowerUrl.endsWith(".m3u8")) {
+            builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        }
+        player.setMediaItem(builder.build())
+        player.prepare()
+        player.playWhenReady = true
+    }
+
+    DisposableEffect(player, currentStation, playbackUrls, playbackIndex, playlistRecoveryTried) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(value: Boolean) {
+                isPlaying = value
+                if (value) playbackStatus = "Live · playing"
+                else if (player.playbackState == Player.STATE_READY && !player.playWhenReady) playbackStatus = "Live · paused"
+            }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                when (state) {
+                    Player.STATE_BUFFERING -> if (currentStation != null) playbackStatus = "Connecting…"
+                    Player.STATE_READY -> if (player.playWhenReady && !player.isPlaying) playbackStatus = "Starting audio…"
+                    Player.STATE_ENDED -> playbackStatus = "Stream ended"
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                val station = currentStation ?: return
+                val nextIndex = playbackIndex + 1
+                if (nextIndex < playbackUrls.size) {
+                    playbackIndex = nextIndex
+                    playUrl(station, playbackUrls[nextIndex], "Trying alternate stream…")
+                    return
                 }
 
-                override fun onPlayerError(error: PlaybackException) {
-                    playerError = error.localizedMessage ?: "This station could not be played."
+                if (!playlistRecoveryTried) {
+                    playlistRecoveryTried = true
+                    playbackStatus = "Repairing stream address…"
+                    val originalUrls = playbackUrls
+                    StationRepository.resolvePlaylistUrls(originalUrls) { recovered ->
+                        (context as? ComponentActivity)?.runOnUiThread {
+                            val combined = (originalUrls + recovered).distinct()
+                            if (combined.size > originalUrls.size && currentStation?.key == station.key) {
+                                playbackUrls = combined
+                                playbackIndex = originalUrls.size
+                                playUrl(station, combined[playbackIndex], "Trying recovered stream…")
+                            } else if (currentStation?.key == station.key) {
+                                playerError = friendlyPlaybackError(error)
+                                playbackStatus = "Couldn’t play this station"
+                            }
+                        }
+                    }
+                } else {
+                    playerError = friendlyPlaybackError(error)
+                    playbackStatus = "Couldn’t play this station"
                 }
-            })
+            }
         }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
 
     DisposableEffect(player) {
@@ -250,6 +477,16 @@ private fun RadioScreen() {
                 }
             }
         }
+    }
+
+    fun playStation(station: Station) {
+        currentStation = station
+        playbackUrls = station.streamUrls
+        playbackIndex = 0
+        playlistRecoveryTried = false
+        playerError = null
+        playUrl(station, station.streamUrls.first(), "Connecting…")
+        StationRepository.countClick(station.uuid)
     }
 
     LaunchedEffect(countryCode) { reload() }
@@ -291,9 +528,16 @@ private fun RadioScreen() {
                     PlayerBar(
                         station = station,
                         isPlaying = isPlaying,
+                        status = playbackStatus,
                         error = playerError,
                         onToggle = {
-                            if (player.isPlaying) player.pause() else player.play()
+                            if (playerError != null) {
+                                playStation(station)
+                            } else if (player.isPlaying) {
+                                player.pause()
+                            } else {
+                                player.play()
+                            }
                         }
                     )
                 }
@@ -353,17 +597,15 @@ private fun RadioScreen() {
                     Text("No stations match “$query”.")
                 }
                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(filtered, key = { it.uuid.ifBlank { it.streamUrl } }) { station ->
+                    items(filtered, key = { it.key }) { station ->
                         StationRow(
                             station = station,
-                            active = currentStation?.uuid == station.uuid,
+                            active = currentStation?.key == station.key,
+                            playing = currentStation?.key == station.key && isPlaying,
                             onClick = {
-                                currentStation = station
-                                playerError = null
-                                player.setMediaItem(MediaItem.fromUri(station.streamUrl))
-                                player.prepare()
-                                player.play()
-                                StationRepository.countClick(station.uuid)
+                                if (currentStation?.key == station.key && player.isPlaying) player.pause()
+                                else if (currentStation?.key == station.key && playerError == null) player.play()
+                                else playStation(station)
                             }
                         )
                     }
@@ -375,7 +617,39 @@ private fun RadioScreen() {
 }
 
 @Composable
-private fun StationRow(station: Station, active: Boolean, onClick: () -> Unit) {
+private fun StationArtwork(station: Station, size: Int, corner: Int) {
+    var bitmap by remember(station.favicon) { mutableStateOf(ArtworkCache.get(station.favicon)) }
+    LaunchedEffect(station.favicon) {
+        if (bitmap == null && station.favicon.isNotBlank()) bitmap = ArtworkCache.load(station.favicon)
+    }
+
+    Surface(
+        modifier = Modifier.size(size.dp),
+        shape = RoundedCornerShape(corner.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = "${station.name} cover",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = station.name.firstOrNull()?.uppercaseChar()?.toString() ?: "♪",
+                    style = if (size >= 56) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StationRow(station: Station, active: Boolean, playing: Boolean, onClick: () -> Unit) {
     val container = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
     Surface(color = container, modifier = Modifier.fillMaxWidth()) {
         ListItem(
@@ -391,21 +665,11 @@ private fun StationRow(station: Station, active: Boolean, onClick: () -> Unit) {
                 }.joinToString(" · ")
                 Text(details.ifBlank { station.country }, maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
-            leadingContent = {
-                Surface(
-                    modifier = Modifier.size(48.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Radio, contentDescription = null)
-                    }
-                }
-            },
+            leadingContent = { StationArtwork(station, size = 52, corner = 14) },
             trailingContent = {
                 Icon(
-                    if (active) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = null
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (playing) "Pause" else "Play"
                 )
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
@@ -414,7 +678,13 @@ private fun StationRow(station: Station, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PlayerBar(station: Station, isPlaying: Boolean, error: String?, onToggle: () -> Unit) {
+private fun PlayerBar(
+    station: Station,
+    isPlaying: Boolean,
+    status: String,
+    error: String?,
+    onToggle: () -> Unit
+) {
     Surface(
         tonalElevation = 3.dp,
         shadowElevation = 8.dp,
@@ -430,32 +700,35 @@ private fun PlayerBar(station: Station, isPlaying: Boolean, error: String?, onTo
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(58.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Radio, contentDescription = null, modifier = Modifier.size(30.dp))
-                }
-            }
+            StationArtwork(station, size = 58, corner = 16)
             Column(modifier = Modifier.weight(1f)) {
                 Text(station.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    error ?: if (isPlaying) "Live · playing" else "Live · paused",
+                    error ?: status,
                     style = MaterialTheme.typography.bodySmall,
                     color = if (error == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            FilledIconButton(onClick = onToggle, enabled = error == null) {
+            FilledIconButton(onClick = onToggle) {
                 Icon(
                     if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play"
+                    contentDescription = if (isPlaying) "Pause" else if (error != null) "Retry" else "Play"
                 )
             }
         }
+    }
+}
+
+private fun friendlyPlaybackError(error: PlaybackException): String {
+    return when (error.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Station server didn’t respond. Tap play to retry."
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Station server rejected the stream. Tap play to retry."
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "This station uses an unsupported stream format."
+        else -> "This station is unavailable right now. Tap play to retry."
     }
 }
 
