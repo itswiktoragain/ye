@@ -1,0 +1,52 @@
+name: Build Local Radio APK
+
+on:
+  push:
+    branches:
+      - chatgpt-local-radio-apk
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-37" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Build installable debug APK
+        working-directory: local-radio-android
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Rename APK
+        run: cp local-radio-android/app/build/outputs/apk/debug/app-debug.apk LocalRadio.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalRadio-APK
+          path: LocalRadio.apk
+          if-no-files-found: error
+          retention-days: 7
