@@ -6,6 +6,10 @@ import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.telephony.TelephonyManager
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import androidx.activity.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,6 +22,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,11 +30,16 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -61,6 +71,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -68,6 +79,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.AudioAttributes
@@ -91,7 +103,9 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10) LocalRadio/1.1"
+private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10) LocalRadio/1.2"
+private const val PREFS_NAME = "local_radio_preferences"
+private const val FAVORITES_KEY = "favorite_station_keys"
 
 data class Station(
     val uuid: String,
@@ -115,7 +129,47 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        hideStatusBar()
         setContent { LocalRadioApp() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hideStatusBar()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideStatusBar()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun hideStatusBar() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.insetsController?.apply {
+                hide(WindowInsets.Type.statusBars())
+                systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        }
+    }
+}
+
+private object FavoriteStore {
+    fun load(context: Context): Set<String> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getStringSet(FAVORITES_KEY, emptySet())?.toSet() ?: emptySet()
+    }
+
+    fun save(context: Context, favorites: Set<String>) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(FAVORITES_KEY, HashSet(favorites))
+            .apply()
     }
 }
 
@@ -226,8 +280,7 @@ private object StationRepository {
             .mapNotNull { line ->
                 val candidate = when {
                     line.startsWith("File", ignoreCase = true) && '=' in line -> line.substringAfter('=').trim()
-                    line.isNotBlank() && !line.startsWith("#") && !line.startsWith("[") &&
-                        !line.contains('=') -> line
+                    line.isNotBlank() && !line.startsWith("#") && !line.startsWith("[") && !line.contains('=') -> line
                     else -> null
                 } ?: return@mapNotNull null
                 runCatching { URL(URL(baseUrl), candidate).toString() }.getOrNull()
@@ -343,6 +396,9 @@ private fun LocalRadioApp() {
 private fun RadioScreen() {
     val context = LocalContext.current
     val stations = remember { mutableStateListOf<Station>() }
+    val favoriteKeys = remember {
+        mutableStateListOf<String>().apply { addAll(FavoriteStore.load(context)) }
+    }
     var isLoading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
@@ -353,6 +409,7 @@ private fun RadioScreen() {
     var playbackUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var playbackIndex by remember { mutableStateOf(0) }
     var playlistRecoveryTried by remember { mutableStateOf(false) }
+    var playerExpanded by rememberSaveable { mutableStateOf(false) }
 
     val countryCode = remember { detectCountryCode(context) }
     val countryName = remember(countryCode) {
@@ -369,12 +426,7 @@ private fun RadioScreen() {
             .setDataSourceFactory(httpFactory)
             .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(1))
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                1_000,
-                12_000,
-                250,
-                500
-            )
+            .setBufferDurationsMs(1_000, 12_000, 250, 500)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -393,14 +445,18 @@ private fun RadioScreen() {
             }
     }
 
+    fun toggleFavorite(station: Station) {
+        if (favoriteKeys.contains(station.key)) favoriteKeys.remove(station.key)
+        else favoriteKeys.add(station.key)
+        FavoriteStore.save(context, favoriteKeys.toSet())
+    }
+
     fun playUrl(station: Station, url: String, status: String) {
         playerError = null
         playbackStatus = status
         val lowerUrl = url.substringBefore('?').lowercase(Locale.ROOT)
         val builder = MediaItem.Builder().setUri(url)
-        if (station.hls || lowerUrl.endsWith(".m3u8")) {
-            builder.setMimeType(MimeTypes.APPLICATION_M3U8)
-        }
+        if (station.hls || lowerUrl.endsWith(".m3u8")) builder.setMimeType(MimeTypes.APPLICATION_M3U8)
         player.setMediaItem(builder.build())
         player.prepare()
         player.playWhenReady = true
@@ -458,9 +514,7 @@ private fun RadioScreen() {
         onDispose { player.removeListener(listener) }
     }
 
-    DisposableEffect(player) {
-        onDispose { player.release() }
-    }
+    DisposableEffect(player) { onDispose { player.release() } }
 
     fun reload() {
         isLoading = true
@@ -489,7 +543,28 @@ private fun RadioScreen() {
         StationRepository.countClick(station.uuid)
     }
 
+    fun togglePlayback(station: Station) {
+        if (playerError != null) playStation(station)
+        else if (player.isPlaying) player.pause()
+        else player.play()
+    }
+
     LaunchedEffect(countryCode) { reload() }
+
+    if (playerExpanded && currentStation != null) {
+        BackHandler { playerExpanded = false }
+        NowPlayingScreen(
+            station = currentStation!!,
+            isPlaying = isPlaying,
+            status = playbackStatus,
+            error = playerError,
+            favorite = favoriteKeys.contains(currentStation!!.key),
+            onClose = { playerExpanded = false },
+            onToggle = { togglePlayback(currentStation!!) },
+            onFavorite = { toggleFavorite(currentStation!!) }
+        )
+        return
+    }
 
     val filtered = if (query.isBlank()) {
         stations.toList()
@@ -530,15 +605,10 @@ private fun RadioScreen() {
                         isPlaying = isPlaying,
                         status = playbackStatus,
                         error = playerError,
-                        onToggle = {
-                            if (playerError != null) {
-                                playStation(station)
-                            } else if (player.isPlaying) {
-                                player.pause()
-                            } else {
-                                player.play()
-                            }
-                        }
+                        favorite = favoriteKeys.contains(station.key),
+                        onOpen = { playerExpanded = true },
+                        onFavorite = { toggleFavorite(station) },
+                        onToggle = { togglePlayback(station) }
                     )
                 }
             }
@@ -602,6 +672,8 @@ private fun RadioScreen() {
                             station = station,
                             active = currentStation?.key == station.key,
                             playing = currentStation?.key == station.key && isPlaying,
+                            favorite = favoriteKeys.contains(station.key),
+                            onFavorite = { toggleFavorite(station) },
                             onClick = {
                                 if (currentStation?.key == station.key && player.isPlaying) player.pause()
                                 else if (currentStation?.key == station.key && playerError == null) player.play()
@@ -617,14 +689,14 @@ private fun RadioScreen() {
 }
 
 @Composable
-private fun StationArtwork(station: Station, size: Int, corner: Int) {
+private fun StationArtwork(station: Station, modifier: Modifier, corner: Int, large: Boolean = false) {
     var bitmap by remember(station.favicon) { mutableStateOf(ArtworkCache.get(station.favicon)) }
     LaunchedEffect(station.favicon) {
         if (bitmap == null && station.favicon.isNotBlank()) bitmap = ArtworkCache.load(station.favicon)
     }
 
     Surface(
-        modifier = Modifier.size(size.dp),
+        modifier = modifier,
         shape = RoundedCornerShape(corner.dp),
         color = MaterialTheme.colorScheme.primaryContainer
     ) {
@@ -639,7 +711,7 @@ private fun StationArtwork(station: Station, size: Int, corner: Int) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
                     text = station.name.firstOrNull()?.uppercaseChar()?.toString() ?: "♪",
-                    style = if (size >= 56) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+                    style = if (large) MaterialTheme.typography.displayLarge else MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
@@ -649,14 +721,19 @@ private fun StationArtwork(station: Station, size: Int, corner: Int) {
 }
 
 @Composable
-private fun StationRow(station: Station, active: Boolean, playing: Boolean, onClick: () -> Unit) {
+private fun StationRow(
+    station: Station,
+    active: Boolean,
+    playing: Boolean,
+    favorite: Boolean,
+    onFavorite: () -> Unit,
+    onClick: () -> Unit
+) {
     val container = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
     Surface(color = container, modifier = Modifier.fillMaxWidth()) {
         ListItem(
             modifier = Modifier.clickable(onClick = onClick),
-            headlineContent = {
-                Text(station.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            },
+            headlineContent = { Text(station.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             supportingContent = {
                 val details = buildList {
                     if (station.state.isNotBlank()) add(station.state)
@@ -665,12 +742,23 @@ private fun StationRow(station: Station, active: Boolean, playing: Boolean, onCl
                 }.joinToString(" · ")
                 Text(details.ifBlank { station.country }, maxLines = 1, overflow = TextOverflow.Ellipsis)
             },
-            leadingContent = { StationArtwork(station, size = 52, corner = 14) },
+            leadingContent = {
+                StationArtwork(station, Modifier.size(52.dp), corner = 14)
+            },
             trailingContent = {
-                Icon(
-                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (playing) "Pause" else "Play"
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onFavorite) {
+                        Icon(
+                            if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (favorite) "Remove favorite" else "Add favorite",
+                            tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (playing) "Pause" else "Play"
+                    )
+                }
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent)
         )
@@ -683,6 +771,9 @@ private fun PlayerBar(
     isPlaying: Boolean,
     status: String,
     error: String?,
+    favorite: Boolean,
+    onOpen: () -> Unit,
+    onFavorite: () -> Unit,
     onToggle: () -> Unit
 ) {
     Surface(
@@ -691,16 +782,17 @@ private fun PlayerBar(
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpen)
             .navigationBarsPadding()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 14.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            StationArtwork(station, size = 58, corner = 16)
+            StationArtwork(station, Modifier.size(58.dp), corner = 16)
             Column(modifier = Modifier.weight(1f)) {
                 Text(station.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
@@ -711,12 +803,116 @@ private fun PlayerBar(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            IconButton(onClick = onFavorite) {
+                Icon(
+                    if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (favorite) "Remove favorite" else "Add favorite"
+                )
+            }
             FilledIconButton(onClick = onToggle) {
                 Icon(
                     if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Pause" else if (error != null) "Retry" else "Play"
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NowPlayingScreen(
+    station: Station,
+    isPlaying: Boolean,
+    status: String,
+    error: String?,
+    favorite: Boolean,
+    onClose: () -> Unit,
+    onToggle: () -> Unit,
+    onFavorite: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Now Playing", fontWeight = FontWeight.SemiBold) },
+                navigationIcon = {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Close player")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.weight(0.25f))
+            StationArtwork(
+                station = station,
+                modifier = Modifier
+                    .widthIn(max = 360.dp)
+                    .fillMaxWidth()
+                    .aspectRatio(1f),
+                corner = 32,
+                large = true
+            )
+            Spacer(Modifier.height(28.dp))
+            Text(
+                station.name,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(8.dp))
+            val details = buildList {
+                if (station.state.isNotBlank()) add(station.state)
+                else if (station.country.isNotBlank()) add(station.country)
+                if (station.codec.isNotBlank()) add(station.codec.uppercase())
+                if (station.bitrate > 0) add("${station.bitrate} kbps")
+            }.joinToString(" · ")
+            if (details.isNotBlank()) {
+                Text(
+                    details,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            Text(
+                error ?: status,
+                color = if (error == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(24.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(22.dp)
+            ) {
+                FilledIconButton(onClick = onFavorite, modifier = Modifier.size(58.dp)) {
+                    Icon(
+                        if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = if (favorite) "Remove favorite" else "Add favorite"
+                    )
+                }
+                FilledIconButton(onClick = onToggle, modifier = Modifier.size(76.dp)) {
+                    Icon(
+                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else if (error != null) "Retry" else "Play",
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.weight(0.35f))
         }
     }
 }
