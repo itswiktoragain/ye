@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b58d0">
+  <meta name="description" content="Find nearby car dealerships and repair workshops for your vehicle brand using live map data.">
+  <title>Drive Nearby</title>
+  <link rel="preconnect" href="https://tile.openstreetmap.org">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ3ynhEEWQzfzQRuUp4c4M0dKNuBqUs=" crossorigin="">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <aside class="side-panel" aria-label="Vehicle business search">
+      <header class="brand-header">
+        <div class="app-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M7.2 12.2 10 6.8A3.2 3.2 0 0 1 12.9 5h6.2A3.2 3.2 0 0 1 22 6.8l2.8 5.4 2.1 1.3a2.6 2.6 0 0 1 1.2 2.2V23a2 2 0 0 1-2 2h-1.2a2 2 0 0 1-2-2v-.5H9.1v.5a2 2 0 0 1-2 2H5.9a2 2 0 0 1-2-2v-7.3a2.6 2.6 0 0 1 1.2-2.2l2.1-1.3Zm2.6-.2h12.4l-2-4a1.2 1.2 0 0 0-1.1-.7h-6.2a1.2 1.2 0 0 0-1.1.7l-2 4Zm-.7 6.7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm13.8 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/></svg>
+        </div>
+        <div>
+          <h1>Drive Nearby</h1>
+          <p>Brand-specific vehicle services</p>
+        </div>
+      </header>
+
+      <form id="searchForm" class="search-form">
+        <div class="field-group">
+          <label for="brandSelect">Vehicle brand</label>
+          <div class="select-wrap">
+            <select id="brandSelect" required aria-describedby="brandHint">
+              <option value="">Select a brand</option>
+            </select>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
+          </div>
+          <span id="brandHint" class="sr-only">Choose the manufacturer you need</span>
+        </div>
+
+        <fieldset class="field-group">
+          <legend>Place type</legend>
+          <div class="type-toggle">
+            <label><input id="dealersCheck" type="checkbox" checked><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 5.3 5h13.4l2.3 5.5M5 14h.01M19 14h.01M4 19v1M20 19v1M3 10.5v7h18v-7H3Z"/></svg>Dealerships</span></label>
+            <label><input id="repairCheck" type="checkbox" checked><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.7 6.3 3-3a4 4 0 0 1-5.1 5.1L6 15l-3 6 6-3 6.6-6.6a4 4 0 0 1 5.1-5.1l-3 3-3-3Z"/></svg>Workshops</span></label>
+          </div>
+        </fieldset>
+
+        <div class="field-group">
+          <div class="label-row"><label for="radiusRange">Search radius</label><output id="radiusOutput" for="radiusRange">25 km</output></div>
+          <input id="radiusRange" type="range" min="5" max="100" step="5" value="25">
+          <div class="range-labels"><span>5 km</span><span>100 km</span></div>
+        </div>
+
+        <div class="location-card" id="locationCard">
+          <div class="location-status">
+            <span class="location-icon" id="locationIcon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s7-6.1 7-12a7 7 0 1 0-14 0c0 5.9 7 12 7 12Z"/><circle cx="12" cy="9" r="2.5"/></svg></span>
+            <div><strong id="locationTitle">Finding your location…</strong><span id="locationDetail">You may be asked for permission</span></div>
+          </div>
+          <button id="locateButton" type="button" class="icon-button" aria-label="Use my current location" title="Use my current location">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+          </button>
+        </div>
+
+        <div class="manual-location" id="manualLocation" hidden>
+          <label for="placeInput">Or enter a city or postcode</label>
+          <div class="place-entry"><input id="placeInput" autocomplete="postal-code" placeholder="e.g. Opole"><button id="findPlaceButton" type="button">Set</button></div>
+        </div>
+
+        <button class="primary-button" id="searchButton" type="submit" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+          <span>Find nearby places</span>
+        </button>
+      </form>
+
+      <section class="results-section" aria-live="polite" aria-busy="false">
+        <div class="results-heading">
+          <div><h2 id="resultsTitle">Nearby places</h2><p id="resultsMeta">Select a brand to begin</p></div>
+          <button id="sortButton" class="text-button" type="button" hidden>Nearest first</button>
+        </div>
+        <div id="resultsList" class="results-list">
+          <div class="empty-state" id="emptyState">
+            <div class="empty-map" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="m5 14 17-8 20 8 17-8v44l-17 8-20-8-17 8V14Z"/><path d="M22 6v44M42 14v44"/><circle cx="33" cy="26" r="7"/><path d="M33 33v8"/></svg></div>
+            <strong>Your next stop is nearby</strong>
+            <span>Choose a brand and we’ll check live business listings around you.</span>
+          </div>
+        </div>
+      </section>
+
+      <footer class="data-footer">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span>Live data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> via Overpass and Nominatim</span>
+      </footer>
+    </aside>
+
+    <section class="map-panel" aria-label="Map of search results">
+      <div id="map"></div>
+      <div class="map-topbar">
+        <div class="map-status" id="mapStatus"><span class="pulse-dot"></span><span>Waiting for location</span></div>
+      </div>
+      <button id="recenterButton" class="map-control" type="button" aria-label="Recenter map on my location" title="Recenter on my location">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+      <div class="map-legend">
+        <span><i class="legend-pin dealer-pin"></i>Dealership</span>
+        <span><i class="legend-pin repair-pin"></i>Workshop</span>
+        <span><i class="legend-user"></i>Your location</span>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>
