@@ -1,4 +1,4 @@
-name: Deploy GitHub Pages
+name: Deploy speedometer to GitHub Pages
 
 on:
   push:
@@ -15,20 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Prepare static site
+        run: |
+          test -s index.html
+          mkdir -p _site
+          cp index.html _site/index.html
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
   deploy:
+    needs: build
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
-      - name: Upload site
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
