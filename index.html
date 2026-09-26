@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Speedometer</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin:0; min-height:100%; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#0b0d10; color:#f7f7f7; }
+    body { min-height:100vh; display:grid; place-items:center; padding:24px; }
+    .card { width:min(92vw,480px); padding:38px 28px 30px; border:1px solid #2a2e35; border-radius:26px; background:#13161b; box-shadow:0 24px 70px rgba(0,0,0,.35); text-align:center; }
+    .label { font-size:14px; letter-spacing:.16em; text-transform:uppercase; color:#9aa3ae; margin-bottom:8px; }
+    .speed { font-size:clamp(72px,22vw,132px); font-weight:750; line-height:.95; letter-spacing:-.06em; font-variant-numeric:tabular-nums; }
+    .unit { margin-top:12px; font-size:22px; color:#b8c0ca; }
+    .meta { margin-top:30px; padding-top:22px; border-top:1px solid #292d34; display:grid; gap:8px; color:#aeb6c1; font-size:14px; }
+    .status { color:#dce1e7; } .error { color:#ff8f8f; }
+    button { margin-top:22px; width:100%; min-height:50px; border:1px solid #3a414b; border-radius:14px; background:#20252c; color:white; font:inherit; font-weight:650; cursor:pointer; }
+    button:active { transform:scale(.99); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="label">Current speed</div><div class="speed" id="speed">0.0</div><div class="unit">km/h</div>
+    <div class="meta"><div id="status" class="status">Press Start to allow location access.</div><div id="accuracy">Accuracy: —</div></div>
+    <button id="start">Start speedometer</button>
+  </main>
+  <script>
+    const speedEl=document.getElementById("speed"),statusEl=document.getElementById("status"),accuracyEl=document.getElementById("accuracy"),startBtn=document.getElementById("start");
+    let watchId=null,previous=null,shownSpeed=0;
+    function distanceMeters(lat1,lon1,lat2,lon2){const R=6371000,toRad=d=>d*Math.PI/180,p1=toRad(lat1),p2=toRad(lat2),dp=toRad(lat2-lat1),dl=toRad(lon2-lon1),a=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
+    function updatePosition(pos){const{latitude,longitude,accuracy,speed}=pos.coords,now=pos.timestamp;let kmh=null;if(typeof speed==="number"&&Number.isFinite(speed)&&speed>=0){kmh=speed*3.6;statusEl.textContent="Using device-reported GPS speed.";}else if(previous){const dt=(now-previous.time)/1000;if(dt>0){const distance=distanceMeters(previous.lat,previous.lon,latitude,longitude);kmh=distance<Math.max(2,accuracy*.25)?0:(distance/dt)*3.6;statusEl.textContent="Speed calculated from GPS movement.";}}previous={lat:latitude,lon:longitude,time:now};if(kmh!==null){shownSpeed=shownSpeed*.65+kmh*.35;if(shownSpeed<.8)shownSpeed=0;speedEl.textContent=shownSpeed.toFixed(1);}accuracyEl.textContent=`Accuracy: ±${Math.round(accuracy)} m`;statusEl.classList.remove("error");}
+    function locationError(err){const messages={1:"Location permission was denied.",2:"Your location is currently unavailable.",3:"Location request timed out."};statusEl.textContent=messages[err.code]||"Could not read your location.";statusEl.classList.add("error");}
+    function start(){if(!("geolocation"in navigator)){statusEl.textContent="This browser does not support geolocation.";statusEl.classList.add("error");return;}if(watchId!==null)navigator.geolocation.clearWatch(watchId);previous=null;shownSpeed=0;speedEl.textContent="0.0";statusEl.textContent="Waiting for GPS…";statusEl.classList.remove("error");startBtn.textContent="Restart speedometer";watchId=navigator.geolocation.watchPosition(updatePosition,locationError,{enableHighAccuracy:true,maximumAge:0,timeout:15000});}
+    startBtn.addEventListener("click",start);
+  </script>
+</body>
+</html>
