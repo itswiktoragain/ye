@@ -11,7 +11,7 @@
 #define IDM_EXIT 104
 #define MAXW 640
 #define MAXH 480
-static HWND mainwnd;
+static HWND mainwnd,pathedit;
 static HGLOBAL image_handle=0;
 static HINSTANCE appinst;
 static HMENU menubar, filemenu, viewmenu;
@@ -76,7 +76,7 @@ static void draw_image(HDC dc, RECT *rc) {
  for(x=0;x<16;x++)
    brushes[x]=CreateSolidBrush(RGB(ega_rgb[x][0],ega_rgb[x][1],ega_rgb[x][2]));
  sw=(unsigned)(rc->right-rc->left);
- sh=(unsigned)(rc->bottom-rc->top-18);
+ sh=(unsigned)(rc->bottom-rc->top-48);
  if(fit) {
    a=(long)sw*image_h;
    b=(long)sh*image_w;
@@ -84,7 +84,7 @@ static void draw_image(HDC dc, RECT *rc) {
    else {dy=sh;dx=(unsigned)((long)sh*image_w/image_h);}
  } else {dx=image_w;dy=image_h;}
  if(!dx)dx=1;if(!dy)dy=1;
- p.left=(short)((sw-dx)/2);p.top=(short)((sh-dy)/2);
+ p.left=(short)((sw-dx)/2);p.top=(short)(30+(sh-dy)/2);
  for(y=0;y<dy;y++) {
    unsigned sy=(unsigned)((unsigned long)y*image_h/dy);
    unsigned last=65535,start=0;
@@ -108,14 +108,10 @@ static void draw_image(HDC dc, RECT *rc) {
  for(x=0;x<16;x++)DeleteObject(brushes[x]);
 }
 static void choose_file(HWND h) {
- /* Windows 1.x predates the common open-file dialog. Use an edit-control
-    modal prompt via a separate top-level window when needed. */
- FARPROC proc;
  char path[128];
- int ret;
- lstrcpy(path,filename[0]?filename:"C:\\IMAGE.CV1");
- ret=MessageBox(h,"Place IMAGE.CV1 in C:\\ or use the current path.\nOpen C:\\IMAGE.CV1 now?","Open image",MB_OKCANCEL);
- if(ret==IDOK) load_cv1(path[0] && filename[0]?filename:"C:\\IMAGE.CV1");
+ GetWindowText(pathedit,path,sizeof(path));
+ if(!path[0]) {say("Type a CV1 file path first");return;}
+ load_cv1(path);
 }
 long FAR PASCAL ViewWndProc(HWND h, unsigned msg, WORD wp, LONG lp){
  PAINTSTRUCT ps;
@@ -123,7 +119,12 @@ long FAR PASCAL ViewWndProc(HWND h, unsigned msg, WORD wp, LONG lp){
  HDC dc;
  switch(msg){
   case WM_CREATE:
-   mainwnd=h; return 0L;
+   mainwnd=h;
+   pathedit=CreateWindow("EDIT","C:\\IMAGE.CV1",WS_CHILD|WS_VISIBLE|WS_BORDER|ES_AUTOHSCROLL,
+                  4,4,330,22,h,(HMENU)202,appinst,0);
+   CreateWindow("BUTTON","Open",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+                  340,4,58,22,h,(HMENU)IDM_OPEN,appinst,0);
+   return 0L;
   case WM_COMMAND:
    switch(wp) {
     case IDM_OPEN: choose_file(h);return 0L;
