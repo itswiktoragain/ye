@@ -1,0 +1,50 @@
+name: Windows 1.04 Viewer
+
+on:
+  push:
+    branches:
+      - agent/win104-image-viewer
+    paths:
+      - 'win104-viewer/**'
+      - '.github/workflows/win104-viewer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  win16:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Open Watcom
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 -o /tmp/watcom-installer \
+            https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/open-watcom-2_0-c-linux-x64
+          chmod +x /tmp/watcom-installer
+          mkdir -p "$HOME/watcom"
+          /tmp/watcom-installer -d "$HOME/watcom" -i
+      - name: Compile native Windows 16-bit EXE
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export WATCOM="$HOME/watcom"
+          export EDPATH="$WATCOM/eddat"
+          export INCLUDE="$WATCOM/h;$WATCOM/h/win"
+          export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
+          cd win104-viewer
+          wcc -bt=windows -ms -zq viewer.c
+          cat > viewer.lnk <<'LINK'
+          system windows
+          name CHRONO.EXE
+          file viewer.obj
+          option map
+          LINK
+          wlink @viewer.lnk
+          file CHRONO.EXE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CHRONO-WIN104-EXE
+          path: win104-viewer/CHRONO.EXE
