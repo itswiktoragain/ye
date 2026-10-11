@@ -12,6 +12,7 @@
 #define MAXW 640
 #define MAXH 480
 static HWND mainwnd;
+static HGLOBAL image_handle=0;
 static HINSTANCE appinst;
 static HMENU menubar, filemenu, viewmenu;
 static char filename[128]="";
@@ -36,6 +37,7 @@ static int load_cv1(const char *path) {
  unsigned short w,h;
  unsigned long bytes, i;
  U8 __far *pix;
+ HGLOBAL newhandle;
  int b;
  f=fopen(path,"rb");
  if(!f) {say("Could not open file");return 0;}
@@ -46,7 +48,8 @@ static int load_cv1(const char *path) {
  if(!w||!h||w>MAXW||h>MAXH){fclose(f);say("Image dimensions exceed 640 x 480");return 0;}
  bytes=(unsigned long)w*(unsigned long)h;
  if(bytes>65520UL){fclose(f);say("Image exceeds single-segment memory. Use a smaller conversion.");return 0;}
- pix=(U8 __far *)GlobalLock(GlobalAlloc(GMEM_FIXED,(DWORD)bytes));
+ newhandle=GlobalAlloc(GMEM_MOVEABLE,(DWORD)bytes);
+ pix=newhandle?(U8 __far *)GlobalLock(newhandle):0;
  if(!pix){fclose(f);say("Insufficient conventional memory");return 0;}
  for(i=0;i<bytes;i++) {
    b=fgetc(f);
@@ -55,10 +58,11 @@ static int load_cv1(const char *path) {
  }
  fclose(f);
  if(i!=bytes){
-   GlobalFree((HGLOBAL)GlobalHandle((LPCSTR)pix));
+   GlobalUnlock(newhandle);GlobalFree(newhandle);
    say("Corrupt/truncated CV1 image");return 0;
  }
- if(image_pixels) GlobalFree((HGLOBAL)GlobalHandle((LPCSTR)image_pixels));
+ if(image_pixels){GlobalUnlock(image_handle);GlobalFree(image_handle);}
+ image_handle=newhandle;
  image_pixels=pix;image_w=w;image_h=h;
  lstrcpy(filename,path);say(path);
  return 1;
@@ -146,7 +150,7 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR args,int show){
  if(!prev) {
   memset(&wc,0,sizeof(wc));
   wc.style=CS_HREDRAW|CS_VREDRAW;
-  wc.lpfnWndProc=ViewWndProc;
+  wc.lpfnWndProc=(WNDPROC)ViewWndProc;
   wc.hInstance=inst;
   wc.hIcon=LoadIcon(0,IDI_APPLICATION);
   wc.hCursor=LoadCursor(0,IDC_ARROW);
