@@ -41,7 +41,7 @@ jobs:
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
           # 8086, small model, separate DS/SS, never assume SS==DS:
-          wcc -bt=windows -ms -0 -zu -zw -nt=_TEXT -dWINVER=0x0100 -zq -fo=viewer.obj viewer.c
+          wcc -bt=windows -ms -0 -zu -zw -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=viewer.obj viewer.c
           cat > viewer.lnk <<'LINK'
           system windows1
           name CHRONO.EXE
