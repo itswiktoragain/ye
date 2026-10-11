@@ -257,14 +257,11 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
     MSG message;
     HWND window;
     HMENU system_menu;
-    FARPROC callback;
     instance=inst;
-    callback=MakeProcInstance((FARPROC)ViewWndProc,inst);
-    if(!callback) return 0;
     if(!prev) {
         memset(&window_class,0,sizeof(window_class));
         window_class.style=CS_HREDRAW|CS_VREDRAW;
-        window_class.lpfnWndProc=(WNDPROC)callback;
+        window_class.lpfnWndProc=(WNDPROC)ViewWndProc;
         window_class.hInstance=inst;
         window_class.hIcon=LoadIcon(0,IDI_APPLICATION);
         window_class.hCursor=LoadCursor(0,IDC_ARROW);
@@ -309,6 +306,5 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
         TranslateMessage(&message);
         DispatchMessage(&message);
     }
-    /* Do not FreeProcInstance: Windows 1.0's lifetime is process-scoped. */
     return (int)message.wParam;
 }
