@@ -1,40 +1,37 @@
-name: Windows 1.04 Viewer
+name: Windows 1.04 Native Viewer
 
 on:
   push:
     branches:
       - agent/win104-image-viewer
     paths:
-      - 'win104-viewer/**'
-      - '.github/workflows/win104-viewer.yml'
+      - "win104-viewer/**"
+      - ".github/workflows/win104-viewer.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  win16:
+  win104:
+    name: Build Windows 1.0 / 8086 NE executable
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Download Open Watcom
+      - name: Install Open Watcom 2 and ZIP tools
         shell: bash
         run: |
-          set -euxo pipefail
-          curl -fL --retry 3 -o /tmp/watcom-installer \
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/ow-linux-x64 \
             https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/open-watcom-2_0-c-linux-x64
-          chmod +x /tmp/watcom-installer
           mkdir -p "$HOME/watcom"
-          sudo apt-get update
-          sudo apt-get install -y p7zip-full xvfb
-          7z l /tmp/watcom-installer | tail -30
-          7z x -y -o"$HOME/watcom" /tmp/watcom-installer || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full
+          7z x -y -o"$HOME/watcom" /tmp/ow-linux-x64 >/dev/null
           chmod -R u+rx "$HOME/watcom/binl64" "$HOME/watcom/binl"
-          find "$HOME/watcom" -maxdepth 4 -iname 'wcc*' -o -iname 'wlink*' | head -30
-          if ! find "$HOME/watcom" -name wcc -print -quit | grep -q .; then
-            xvfb-run -a /tmp/watcom-installer -d "$HOME/watcom" -i
-          fi
-      - name: Compile native Windows 16-bit EXE
+
+      - name: Compile for Windows 1.04 with true windows1 runtime
         shell: bash
         run: |
           set -euxo pipefail
@@ -43,29 +40,63 @@ jobs:
           export INCLUDE="$WATCOM/h;$WATCOM/h/win"
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
-          wcc -bt=windows -ms -zq -fo=viewer.obj viewer.c
-          ls -la viewer*
+          # 8086, small model, separate DS/SS, never assume SS==DS:
+          wcc -bt=windows -ms -0 -zu -zw -nt=_TEXT -dWINVER=0x0100 -zq -fo=viewer.obj viewer.c
           cat > viewer.lnk <<'LINK'
-          system windows
+          system windows1
           name CHRONO.EXE
           file viewer.obj
-          option map
+          EXPORT ViewWndProc.1 PRIVATE RESIDENT
+          segment TYPE CODE PRELOAD MOVEABLE DISCARDABLE SHARED
+          segment TYPE DATA PRELOAD MOVEABLE
+          option stack=8192
+          option heapsize=4096
+          option map=CHRONO.MAP
           LINK
           wlink @viewer.lnk
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('CHRONO.EXE')
-          b=bytearray(p.read_bytes())
-          ne=int.from_bytes(b[0x3c:0x40],'little')
-          assert b[ne:ne+2]==b'NE'
-          assert b[ne+0x36]==2, 'Not a Windows NE executable'
-          # Watcom defaults to a Windows 3.0 minimum; request Windows 1.0.
-          # This adjusts the loader requirement but is NOT an emulator compatibility test.
-          b[ne+0x3e:ne+0x40]=bytes([0, 1])
-          p.write_bytes(b)
-          PY
           file CHRONO.EXE
-      - uses: actions/upload-artifact@v4
+          ls -l CHRONO.EXE CHRONO.MAP
+
+      - name: Verify NE imports, target and real-mode compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
+
+      - name: Package EXE with test image
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('win104-viewer/IMAGE.CV1')
+          w,h=96,64
+          colors=bytes(((x//8) + (y//8)*2)%16 for y in range(h) for x in range(w))
+          p.write_bytes(b'CV1\x1a' + w.to_bytes(2,'little') + h.to_bytes(2,'little') + colors)
+          PY
+          cd win104-viewer
+          cat > INSTALL.TXT <<'TXT'
+          ChronoView for Windows 1.04 - experimental real-mode build
+
+          1. Copy CHRONO.EXE and IMAGE.CV1 into C:\ in the emulator.
+          2. Start Windows 1.04 and launch CHRONO.EXE through MS-DOS
+             Executive (or your emulator's normal Windows app launcher).
+          3. Enter C:\IMAGE.CV1 in the file path box and click Open.
+          4. For modern PNG/JPEG/WebP photos, use convert.html on your
+             phone or current PC to save a CV1 image, then transfer it
+             into the emulated DOS drive.
+
+          The application uses only the 16-color CV1 format directly.
+          It does not decode PNG/JPEG/WebP in the 1985 operating system.
+          Building is verified; actual Windows 1.04 boot is not emulator-tested.
+          TXT
+
+      - name: Upload runnable files
+        uses: actions/upload-artifact@v4
         with:
-          name: CHRONO-WIN104-EXE
-          path: win104-viewer/CHRONO.EXE
+          name: CHRONOVIEW-WIN104-8086
+          path: |
+            win104-viewer/CHRONO.EXE
+            win104-viewer/IMAGE.CV1
+            win104-viewer/INSTALL.TXT
+          if-no-files-found: error
