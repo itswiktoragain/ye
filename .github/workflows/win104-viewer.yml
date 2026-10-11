@@ -99,4 +99,5 @@ jobs:
             win104-viewer/CHRONO.EXE
             win104-viewer/IMAGE.CV1
             win104-viewer/INSTALL.TXT
+            win104-viewer/convert.html
           if-no-files-found: error
