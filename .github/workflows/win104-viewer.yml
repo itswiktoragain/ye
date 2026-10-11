@@ -52,6 +52,18 @@ jobs:
           option map
           LINK
           wlink @viewer.lnk
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('CHRONO.EXE')
+          b=bytearray(p.read_bytes())
+          ne=int.from_bytes(b[0x3c:0x40],'little')
+          assert b[ne:ne+2]==b'NE'
+          assert b[ne+0x36]==2, 'Not a Windows NE executable'
+          # Watcom defaults to a Windows 3.0 minimum; request Windows 1.0.
+          # This adjusts the loader requirement but is NOT an emulator compatibility test.
+          b[ne+0x3e:ne+0x40]=b'\\x00\\x01'
+          p.write_bytes(b)
+          PY
           file CHRONO.EXE
       - uses: actions/upload-artifact@v4
         with:
