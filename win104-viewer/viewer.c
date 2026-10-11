@@ -28,6 +28,14 @@ static HGLOBAL image_handle;
 static int fit_image = 1;
 static char status_text[128] = "Enter a CV1 file path and select Open";
 static char image_path[128];
+/* Static DS storage is mandatory with -zu/-zw: stack locals reside in SS,
+ * but Win16 C runtime calls like fopen/fread/memset take near DS pointers. */
+static char path_copy[128];
+static unsigned char cv_header[8];
+static char path_request[128];
+static char arg_path[128];
+static WNDCLASS window_class;
+static RECT image_area;
 
 U8 __far *image_pixels = 0;
 unsigned image_w = 0, image_h = 0, actual_w = 0, actual_h = 0;
@@ -49,33 +57,31 @@ static void set_status(const char *msg) {
 }
 static int load_cv1(const char *name) {
     FILE *f;
-    unsigned char hdr[8];
     unsigned w, h;
     unsigned long count, i;
     HGLOBAL next_handle;
     U8 __far *new_pixels;
     int c;
-    char pathcopy[128];
 
     /* The edit box limits names to at most 127 chars. */
     if (!name || !*name) {
         set_status("Type an image file path first");
         return 0;
     }
-    lstrcpy(pathcopy,name);
-    f=fopen(pathcopy,"rb");
+    lstrcpy(path_copy,name);
+    f=fopen(path_copy,"rb");
     if(!f) {
         set_status("Unable to open this file");
         return 0;
     }
-    if(fread(hdr,1,8,f)!=8 ||
-       hdr[0]!='C' || hdr[1]!='V' || hdr[2]!='1' || hdr[3]!=26) {
+    if(fread(cv_header,1,8,f)!=8 ||
+       cv_header[0]!='C' || cv_header[1]!='V' || cv_header[2]!='1' || cv_header[3]!=26) {
         fclose(f);
         set_status("Invalid CV1 file - use converter first");
         return 0;
     }
-    w=(unsigned)hdr[4] | ((unsigned)hdr[5]<<8);
-    h=(unsigned)hdr[6] | ((unsigned)hdr[7]<<8);
+    w=(unsigned)cv_header[4] | ((unsigned)cv_header[5]<<8);
+    h=(unsigned)cv_header[6] | ((unsigned)cv_header[7]<<8);
     count=(unsigned long)w*(unsigned long)h;
     if(!w || !h || w>FILE_W_MAX || h>FILE_H_MAX || count>MAX_PIXELS) {
         fclose(f);
@@ -117,19 +123,18 @@ static int load_cv1(const char *name) {
     image_h=h;
     actual_w=w;
     actual_h=h;
-    lstrcpy(image_path,pathcopy);
+    lstrcpy(image_path,path_copy);
     set_status("CV1 image loaded - View > Fit controls zoom");
     return 1;
 }
 static void open_edit_path(void) {
-    char path[128];
     if(!path_box) {
         set_status("Image file path control unavailable");
         return;
     }
-    GetWindowText(path_box,path,sizeof(path));
-    if(path[0])
-        load_cv1(path);
+    GetWindowText(path_box,path_request,sizeof(path_request));
+    if(path_request[0])
+        load_cv1(path_request);
     else
         set_status("Type a path such as C:\\IMAGE.CV1");
 }
@@ -205,7 +210,6 @@ static void draw_picture(HDC dc, const RECT *rect) {
 }
 long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam) {
     PAINTSTRUCT ps;
-    RECT bounds;
     HDC dc;
     switch(msg) {
       case WM_CREATE:
@@ -232,9 +236,9 @@ long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lPa
         break;
       case WM_PAINT:
         dc=BeginPaint(h,&ps);
-        GetClientRect(h,&bounds);
-        draw_picture(dc,&bounds);
-        TextOut(dc,5,(short)(bounds.bottom-16),
+        GetClientRect(h,&image_area);
+        draw_picture(dc,&image_area);
+        TextOut(dc,5,(short)(image_area.bottom-16),
                 status_text,lstrlen(status_text));
         EndPaint(h,&ps);
         return 0L;
@@ -250,25 +254,23 @@ long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lPa
     return DefWindowProc(h,msg,wParam,lParam);
 }
 int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
-    WNDCLASS cls;
     MSG message;
     HWND window;
     HMENU system_menu;
-    char path[128];
     FARPROC callback;
     instance=inst;
     callback=MakeProcInstance((FARPROC)ViewWndProc,inst);
     if(!callback) return 0;
     if(!prev) {
-        memset(&cls,0,sizeof(cls));
-        cls.style=CS_HREDRAW|CS_VREDRAW;
-        cls.lpfnWndProc=(WNDPROC)callback;
-        cls.hInstance=inst;
-        cls.hIcon=LoadIcon(0,IDI_APPLICATION);
-        cls.hCursor=LoadCursor(0,IDC_ARROW);
-        cls.hbrBackground=(HBRUSH)GetStockObject(WHITE_BRUSH);
-        cls.lpszClassName="Chrono104";
-        if(!RegisterClass(&cls)) {
+        memset(&window_class,0,sizeof(window_class));
+        window_class.style=CS_HREDRAW|CS_VREDRAW;
+        window_class.lpfnWndProc=(WNDPROC)callback;
+        window_class.hInstance=inst;
+        window_class.hIcon=LoadIcon(0,IDI_APPLICATION);
+        window_class.hCursor=LoadCursor(0,IDC_ARROW);
+        window_class.hbrBackground=(HBRUSH)GetStockObject(WHITE_BRUSH);
+        window_class.lpszClassName="Chrono104";
+        if(!RegisterClass(&window_class)) {
             MessageBox(0,"Unable to register window class",
                        "ChronoView error",MB_OK);
             return 0;
@@ -296,12 +298,12 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
     if(cmd && *cmd) {
         /* Trim opening quote, if any. No Win3-only lstrcpyn import. */
         unsigned j=0;
-        const char *start=cmd;
+        const char __far *start=cmd;
         if(*start=='"')start++;
-        while(*start && *start!='"' && j<127) path[j++]=*start++;
-        path[j]=0;
-        if(path_box)SetWindowText(path_box,path);
-        if(path[0])load_cv1(path);
+        while(*start && *start!='"' && j<127) arg_path[j++]=*start++;
+        arg_path[j]=0;
+        if(path_box)SetWindowText(path_box,arg_path);
+        if(arg_path[0])load_cv1(arg_path);
     }
     while(GetMessage(&message,0,0,0)) {
         TranslateMessage(&message);
