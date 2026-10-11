@@ -61,7 +61,7 @@ jobs:
           assert b[ne+0x36]==2, 'Not a Windows NE executable'
           # Watcom defaults to a Windows 3.0 minimum; request Windows 1.0.
           # This adjusts the loader requirement but is NOT an emulator compatibility test.
-          b[ne+0x3e:ne+0x40]=b'\\x00\\x01'
+          b[ne+0x3e:ne+0x40]=bytes([0, 1])
           p.write_bytes(b)
           PY
           file CHRONO.EXE
