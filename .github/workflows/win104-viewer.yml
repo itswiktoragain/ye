@@ -43,7 +43,8 @@ jobs:
           export INCLUDE="$WATCOM/h;$WATCOM/h/win"
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
-          wcc -bt=windows -ms -zq viewer.c
+          wcc -bt=windows -ms -zq -fo=viewer.obj viewer.c
+          ls -la viewer*
           cat > viewer.lnk <<'LINK'
           system windows
           name CHRONO.EXE
