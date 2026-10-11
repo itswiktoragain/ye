@@ -25,7 +25,14 @@ jobs:
             https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/open-watcom-2_0-c-linux-x64
           chmod +x /tmp/watcom-installer
           mkdir -p "$HOME/watcom"
-          /tmp/watcom-installer -d "$HOME/watcom" -i
+          sudo apt-get update
+          sudo apt-get install -y p7zip-full xvfb
+          7z l /tmp/watcom-installer | tail -30
+          7z x -y -o"$HOME/watcom" /tmp/watcom-installer || true
+          find "$HOME/watcom" -maxdepth 4 -iname 'wcc*' -o -iname 'wlink*' | head -30
+          if ! find "$HOME/watcom" -name wcc -print -quit | grep -q .; then
+            xvfb-run -a /tmp/watcom-installer -d "$HOME/watcom" -i
+          fi
       - name: Compile native Windows 16-bit EXE
         shell: bash
         run: |
