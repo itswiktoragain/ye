@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChronoView Image Converter</title><style>body{font:16px system-ui;margin:0;background:#eee;color:#111}main{max-width:680px;margin:24px auto;padding:20px;background:white;border:1px solid #bbb}button,input{font:inherit;padding:10px}button{background:#222;color:white;border:0}canvas{max-width:100%;image-rendering:pixelated;border:1px solid #888}p{line-height:1.45}</style></head><body><main><h1>ChronoView Converter</h1><p>Convert a PNG, JPEG or WebP photo into a 16-colour <b>.CV1</b> image for the Windows 1.04 viewer. Everything happens locally on your phone.</p><input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/*"><p><label>Max width <input id="width" type="number" min="8" max="640" value="256" style="width:90px"></label></p><button id="go">Convert &amp; download CV1</button><p id="info">Images are automatically reduced to fit a 64 KiB memory segment.</p><canvas id="canvas"></canvas></main><script>
+const palette=[[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
+document.getElementById('go').onclick=async()=>{
+ const f=document.getElementById('file').files[0],info=document.getElementById('info');
+ if(!f){info.textContent='Select an image first.';return}
+ let bmp;
+ try{bmp=await createImageBitmap(f)}catch(e){info.textContent='Unable to decode this image in your browser.';return}
+ const maxw=Math.min(640,Math.max(8,+document.getElementById('width').value||256));
+ let scale=Math.min(1,maxw/bmp.width,480/bmp.height,Math.sqrt(65520/(bmp.width*bmp.height)));
+ let w=Math.max(1,Math.floor(bmp.width*scale)),h=Math.max(1,Math.floor(bmp.height*scale));
+ while(w*h>65520){if(w>=h)w--;else h--;}
+ const canvas=document.getElementById('canvas');canvas.width=w;canvas.height=h;
+ const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(bmp,0,0,w,h);
+ const rgba=ctx.getImageData(0,0,w,h).data;
+ const output=new Uint8Array(8+w*h);
+ output.set([67,86,49,26,w&255,w>>8,h&255,h>>8]);
+ const pal=new Uint8Array(palette.flat());
+ for(let i=0;i<w*h;i++){
+   const o=i*4,a=rgba[o+3]/255;
+   const r=Math.round(rgba[o]*a+255*(1-a)),g=Math.round(rgba[o+1]*a+255*(1-a)),b=Math.round(rgba[o+2]*a+255*(1-a));
+   let best=0,err=1e12;
+   for(let j=0;j<16;j++){
+     const dr=r-pal[j*3],dg=g-pal[j*3+1],db=b-pal[j*3+2];
+     const d=dr*dr*0.30+dg*dg*0.59+db*db*0.11;
+     if(d<err){err=d;best=j;}
+   }
+   output[8+i]=best;
+   rgba[o]=pal[best*3];rgba[o+1]=pal[best*3+1];rgba[o+2]=pal[best*3+2];rgba[o+3]=255;
+ }
+ ctx.putImageData(new ImageData(rgba,w,h),0,0);
+ const url=URL.createObjectURL(new Blob([output],{type:'application/octet-stream'}));
+ const a=document.createElement('a');a.href=url;a.download=(f.name.replace(/\.[^.]+$/,'').replace(/[^a-z0-9_-]/gi,'_').slice(0,8)||'IMAGE').toUpperCase()+'.CV1';
+ a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);
+ info.textContent='Converted '+bmp.width+'×'+bmp.height+' to '+w+'×'+h+' — '+output.length+' bytes.';
+ bmp.close();
+};
+</script></body></html>
