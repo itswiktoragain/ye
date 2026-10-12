@@ -40,7 +40,8 @@ static unsigned char ph_palette[256][4];
 static unsigned ph_palette_count;
 static unsigned long ph_chunk_size;
 static unsigned char ph_chunk_name[5];
-static unsigned char ph_lengths[320],ph_codes[19];
+static unsigned char ph_lengths[320];
+static unsigned char ph_codes[19];
 static unsigned ph_target_y;
 static unsigned char __far *ph_swap_ptr;
 static unsigned ph_gray_transparent,ph_rgb_transparent;
@@ -172,9 +173,9 @@ static int ph_block(void) {
     }
     if(ph_mode==1) {
         for(i=0;i<288;i++)
-            lengths[i]=(unsigned char)(i<144?8:i<256?9:i<280?7:8);
+            ph_lengths[i]=(unsigned char)(i<144?8:i<256?9:i<280?7:8);
         ph_huff(&ph_lit,ph_lengths,288);
-        for(i=0;i<32;i++)lengths[i]=5;
+        for(i=0;i<32;i++)ph_lengths[i]=5;
         ph_huff(&ph_dist,ph_lengths,32);
         return 1;
     }
@@ -182,30 +183,30 @@ static int ph_block(void) {
     ndist=ph_bits(5)+1;
     ncode=ph_bits(4)+4;
     if(ph_bad || nlit>286 || ndist>32)return 0;
-    for(i=0;i<19;i++)codes[i]=0;
-    for(i=0;i<ncode;i++)codes[order[i]]=(unsigned char)ph_bits(3);
+    for(i=0;i<19;i++)ph_codes[i]=0;
+    for(i=0;i<ncode;i++)ph_codes[order[i]]=(unsigned char)ph_bits(3);
     ph_huff(&ph_code,ph_codes,19);
     index=0;
     while(index<nlit+ndist) {
         int s=ph_symbol(&ph_code);
         if(s<0)return 0;
-        if(s<=15)lengths[index++]=(unsigned char)s;
+        if(s<=15)ph_lengths[index++]=(unsigned char)s;
         else {
             if(s==16) {
                 if(index==0)return 0;
                 run=ph_bits(2)+3;
-                value=lengths[index-1];
+                value=ph_lengths[index-1];
             } else if(s==17) {
                 run=ph_bits(3)+3;value=0;
             } else if(s==18) {
                 run=ph_bits(7)+11;value=0;
             } else return 0;
             if(index+run>nlit+ndist)return 0;
-            for(j=0;j<run;j++)lengths[index++]=(unsigned char)value;
+            for(j=0;j<run;j++)ph_lengths[index++]=(unsigned char)value;
         }
         if(ph_bad)return 0;
     }
-    if(!lengths[256])return 0;
+    if(!ph_lengths[256])return 0;
     ph_huff(&ph_lit,ph_lengths,nlit);
     ph_huff(&ph_dist,ph_lengths+nlit,ndist);
     return 1;
@@ -513,7 +514,7 @@ static int ph_init_png(void) {
             }
         } else if(ph_is(name,"IEND"))return 0;
         else {
-            if(!ph_skip(length))return 0;
+            if(!ph_skip(ph_chunk_size))return 0;
         }
         if(ph_bad || !ph_skip(4))return 0; /* chunk CRC */
     }
