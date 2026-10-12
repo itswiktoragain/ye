@@ -99,10 +99,10 @@ def validate(path):
         flags=word(seg+4)
         assert flags&0x10 and not(flags&0x1000),"Code must be movable, non-discardable"
         head=b[start+off:start+off+64]
-        i=head.find(b"\\xb8\\xff\\xff\\x8e\\xd8")
+        i=head.find(b"\xb8\xff\xff\x8e\xd8")
         assert i>=0, f"Callback {ordinal} lacks DGROUP restoration"
         prefix=head[:i]
-        assert b"\\xe8" not in prefix and b"\\x9a" not in prefix, f"Callback {ordinal} calls helper before DS restore"
+        assert b"\xe8" not in prefix and b"\x9a" not in prefix, f"Callback {ordinal} calls helper before DS restore"
         rel=start+n
         matches=[]
         for j in range(word(rel)):
