@@ -99,6 +99,12 @@ def verify(path):
         pattern=b"\xb8\xff\xff\x8e\xd8"
         pattern_index=head.find(pattern)
         assert pattern_index>=0, "Window callback does not reload its data segment"
+        # A compiler stack-check call before DS is restored can read USER.EXE
+        # memory and corrupt the caller. Require straight-line setup only.
+        setup=head[:pattern_index]
+        assert b"\xe8" not in setup and b"\x9a" not in setup, (
+            "Callback calls a helper before DGROUP reload (unsafe stack checker)"
+        )
         imm_offset=entry_offset+pattern_index+1
         reloc=code_pos+code_size
         reloc_count=u16(reloc)
