@@ -45,7 +45,8 @@ jobs:
           # __loadds has restored DS in an exported Windows 1.x WndProc.
           flags="-bt=windows -ms -0 -zu -zw -bg -s -nt=_TEXT -dWINVER=0x0100 -wx -we -zq"
           wcc $flags -fo=sdkprobe.obj sdkprobe.c
-          wcc $flags -fo=win104safe.obj win104safe.c
+          wrc -q -r -10 -bt=windows -fo=win104picker.res win104picker.rc
+          wcc $flags -fo=win104picker.obj win104picker.c
           wcc $flags -fo=minwin.obj minwin.c
 
           cat > sdkprobe.lnk <<'LINK'
@@ -64,13 +65,15 @@ jobs:
           cat > sdkviewer.lnk <<'LINK'
           system windows1
           name CHRONO.EXE
-          file win104safe.obj
+          file win104picker.obj
           EXPORT ChronoWndProc.1 PRIVATE RESIDENT
+          EXPORT ChronoOpenDlgProc.2 PRIVATE RESIDENT
           segment TYPE CODE MOVEABLE
           segment TYPE DATA MOVEABLE
           option stack=6144
           option heapsize=2048
           option map=CHRONO.MAP
+          option resource=win104picker.res
           LINK
           wlink @sdkviewer.lnk
 
@@ -94,6 +97,16 @@ jobs:
           set -euo pipefail
           python3 win104-viewer/verify_ne.py win104-viewer/SDKPROBE.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
+          python3 - <<'PY'
+          from pathlib import Path
+          b=Path("win104-viewer/CHRONO.EXE").read_bytes()
+          ne=int.from_bytes(b[0x3c:0x40],"little")
+          assert b[ne:ne+2]==b"NE"
+          resource_table=ne+int.from_bytes(b[ne+0x24:ne+0x26],"little")
+          resource_end=ne+int.from_bytes(b[ne+0x26:ne+0x28],"little")
+          assert resource_end>resource_table+8, "Missing Win1 native Open-dialog resources"
+          print("CHECK PASSED: Win1 resource table found")
+          PY
           python3 win104-viewer/verify_ne.py win104-viewer/MINWIN.EXE
           python3 - <<'PY'
           from pathlib import Path
@@ -117,38 +130,37 @@ jobs:
               b"CV1\x1a"+w.to_bytes(2,"little")+h.to_bytes(2,"little")+data)
           PY
           cat > win104-viewer/INSTALL.TXT <<'TXT'
-          ChronoView Windows 1.04: new native-file-API build
+          ChronoView - Windows 1.04 native Open-file dialog
 
-          CAUTION: Previously-built CHRONO.EXE versions corrupted memory.
-          Use a disposable VM snapshot. Power OFF fully before testing.
+          This build extends the earlier working win104safe.c viewer.
+          The verified image decoder, memory bounds, and Windows kernel
+          _lopen/_lread/_lclose code remain unchanged.
 
-          1. Copy CHRONO.EXE and IMAGE.CV1 into C:\\ (emulated drive).
-          2. Start Windows 1.04 from cold power-on.
-          3. Launch CHRONO.EXE through MS-DOS Executive.
-          4. Check that window title says "ChronoView". Move the window
-             around several times before opening the test image.
-          5. Press O to load the test file C:\\IMAGE.CV1.
-          6. Press P to edit the DOS path. Enter saves, Esc restores.
-             Press F to toggle Fit. Press Q to close.
-          7. Host-side convert.html converts PNG/JPEG/WebP to 16-colour
-             CV1, at 16384 pixels maximum, for this build.
+          1. Copy CHRONO.EXE and an IMAGE.CV1 image into the emulator.
+          2. Start Windows 1.04 from a clean cold boot.
+          3. Run CHRONO.EXE. The image area should be blank white.
+          4. Click the title-bar system menu and choose "Open...".
+          5. The Windows 1.04 native dialog lists .CV1 images, folders
+             and drive letters. Click a filename then Open, or double
+             click a file. Double-click a folder/drive to navigate.
+          6. The dialog closes and the image appears in the white area.
+          7. The title-bar menu also offers "Clear" and "Fit image".
+             O is an optional keyboard shortcut to open the dialog.
 
-          Image file handling uses native Windows 1.x KERNEL._lopen,
-          _lread and _lclose, not fopen/fread/fgetc/_dos_open.
-          The Watcom Windows1 startup still contains normal DOS
-          version-check and task-exit instructions. No custom window
-          icon, modal startup dialog or instance-memory copy is used.
+          PNG, JPG/JPEG and WebP still need the included convert.html
+          on your phone. The viewer loads the converted DOS 8.3 .CV1
+          file, not modern compressed image formats directly.
+          Max 16384 indexed pixels, 16 EGA colors, no upscale.
 
-          The code is compiled for 8086 Windows1 with a resident
-          __loadds callback; binary relocation and import-table checks
-          pass at build time. Windows 1.04 emulator execution has NOT
-          been verified. If launching causes a freeze, stop and send
-          the behavior; do not repeatedly relaunch on the same guest.
+          This has passed GitHub build and static Win1 NE import checks.
+          It is NOT verified by running under an actual Win1.04 emulator.
+          Test on a disposable disk/snapshot; do not restore corrupted
+          emulator RAM snapshots following a guest crash.
           TXT
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CHRONOVIEW-104-KERNEL-IO-REWRITE
+          name: CHRONOVIEW-104-WHITE-CANVAS-PICKER
           path: |
             win104-viewer/MINWIN.EXE
             win104-viewer/SDKPROBE.EXE
