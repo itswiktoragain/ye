@@ -21,7 +21,7 @@ typedef struct {
 } PNG_HUFF;
 
 static PNG_HUFF ph_lit,ph_dist,ph_code;
-unsigned cv_png_debug_stage=0,cv_png_debug_row=0;
+unsigned cv_png_debug_stage=0,cv_png_debug_row=0,cv_png_debug_detail=0;
 unsigned long cv_png_debug_output=0;
 static HFILE ph_file;
 static unsigned char ph_filebuf[512];
@@ -375,7 +375,11 @@ static int ph_decode_rows(void) {
         if(filter>4){cv_png_debug_stage=10+filter;cv_png_debug_output=ph_total_out;return 0;}
         for(x=0;x<ph_stride;x++) {
             raw=ph_inflate();
-            if(raw>255){cv_png_debug_stage=500;cv_png_debug_output=ph_total_out;return 0;}
+            if(raw>255){
+                cv_png_debug_stage=500;
+                cv_png_debug_detail=ph_bad?2:ph_done?1:(unsigned)ph_mode+10;
+                cv_png_debug_output=ph_total_out;return 0;
+            }
             a=x>=ph_bpp ? ph_curr[x-ph_bpp]:0;
             b=ph_prev[x];
             c=x>=ph_bpp ? ph_prev[x-ph_bpp]:0;
