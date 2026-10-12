@@ -67,8 +67,11 @@ def verify(path):
                 ordname=data[n+1:n+data[n]+1].decode("ascii")
                 assert (mod,ordname) not in forbidden
             found.add((mod,ordname))
-    expected={("KERNEL",91),("USER",41),("USER",57)}
-    assert expected<=found, "Win16 runtime/GUI imports unexpectedly missing"
+    if Path(path).name.upper()=="MINWIN.EXE":
+        expected={("KERNEL",91)} # CRT startup only; MINWIN has no USER GUI
+    else:
+        expected={("KERNEL",91),("USER",41),("USER",57)}
+    assert expected<=found, f"Win16 runtime imports unexpectedly missing: {expected-found}"
     entry_size=u16(ne+6)
     assert entry_size>0, "No entry table / exported window proc"
     print(f"VALIDATED: {path}")
