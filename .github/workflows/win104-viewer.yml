@@ -97,6 +97,7 @@ jobs:
           set -euo pipefail
           python3 win104-viewer/verify_ne.py win104-viewer/SDKPROBE.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
+          python3 win104-viewer/verify_picker.py win104-viewer/CHRONO.EXE
           python3 - <<'PY'
           from pathlib import Path
           b=Path("win104-viewer/CHRONO.EXE").read_bytes()
