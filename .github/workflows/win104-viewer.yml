@@ -56,7 +56,7 @@ jobs:
           import re
           p=Path("picojpeg.c")
           data=p.read_text()
-          data,n=re.subn(r'\\(\\(-1\\)<<(\\d+)\\) \\+ 1',
+          data,n=re.subn(r'\(\(-1\)<<(\d+)\) \+ 1',
                          lambda m: f'(1L - (1L << {m.group(1)}))',data)
           assert n==15, f'Unexpected picojpeg shift source: {n}'
           p.write_text(data)
