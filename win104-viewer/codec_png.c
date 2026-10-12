@@ -34,9 +34,15 @@ static unsigned char __far *ph_history;
 static unsigned ph_width,ph_height,ph_type,ph_depth;
 static unsigned ph_channels,ph_bpp,ph_stride;
 static HGLOBAL ph_currhandle,ph_prevhandle;
-static unsigned char __far *ph_curr,*ph_prev;
+static unsigned char __far *ph_curr;
+static unsigned char __far *ph_prev;
 static unsigned char ph_palette[256][4];
 static unsigned ph_palette_count;
+static unsigned long ph_chunk_size;
+static unsigned char ph_chunk_name[5];
+static unsigned char ph_lengths[320],ph_codes[19];
+static unsigned ph_target_y;
+static unsigned char __far *ph_swap_ptr;
 static unsigned ph_gray_transparent,ph_rgb_transparent;
 static unsigned ph_trns_gray,ph_trns_r,ph_trns_g,ph_trns_b;
 
@@ -70,17 +76,17 @@ static unsigned ph_be16(void) {
     if(a<0 || b<0){ph_bad=1;return 0;}
     return (unsigned)((a<<8)|b);
 }
-static int ph_chunk(unsigned long *len,unsigned char name[5]) {
+static int ph_chunk(void) {
     unsigned i;
     int c;
-    *len=ph_be32();
-    if(ph_bad || *len>PNG_CHUNK_LIMIT)return 0;
+    ph_chunk_size=ph_be32();
+    if(ph_bad || ph_chunk_size>PNG_CHUNK_LIMIT)return 0;
     for(i=0;i<4;i++) {
         c=ph_filebyte();
         if(c<0)return 0;
-        name[i]=(unsigned char)c;
+        ph_chunk_name[i]=(unsigned char)c;
     }
-    name[4]=0;
+    ph_chunk_name[4]=0;
     return 1;
 }
 static int ph_is(const unsigned char *a,const char *name) {
@@ -89,15 +95,13 @@ static int ph_is(const unsigned char *a,const char *name) {
     return 1;
 }
 static int ph_next_zbyte(void) {
-    unsigned char tag[5];
-    unsigned long size;
     int c;
     while(!ph_idat_remaining) {
         /* End of one PNG IDAT chunk -> CRC and next IDAT header. */
         if(!ph_skip(4))return -1;
-        if(!ph_chunk(&size,tag))return -1;
-        if(!ph_is(tag,"IDAT"))return -1;
-        ph_idat_remaining=size;
+        if(!ph_chunk())return -1;
+        if(!ph_is(ph_chunk_name,"IDAT"))return -1;
+        ph_idat_remaining=ph_chunk_size;
     }
     c=ph_filebyte();
     if(c<0)return -1;
@@ -152,7 +156,6 @@ static int ph_block(void) {
         16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15
     };
     unsigned i,j,nlit,ndist,ncode,index,run,value;
-    unsigned char lengths[320],codes[19];
     unsigned hdr=ph_bits(3);
     if(ph_bad)return 0;
     ph_last=hdr&1;
@@ -170,9 +173,9 @@ static int ph_block(void) {
     if(ph_mode==1) {
         for(i=0;i<288;i++)
             lengths[i]=(unsigned char)(i<144?8:i<256?9:i<280?7:8);
-        ph_huff(&ph_lit,lengths,288);
+        ph_huff(&ph_lit,ph_lengths,288);
         for(i=0;i<32;i++)lengths[i]=5;
-        ph_huff(&ph_dist,lengths,32);
+        ph_huff(&ph_dist,ph_lengths,32);
         return 1;
     }
     nlit=ph_bits(5)+257;
@@ -181,7 +184,7 @@ static int ph_block(void) {
     if(ph_bad || nlit>286 || ndist>32)return 0;
     for(i=0;i<19;i++)codes[i]=0;
     for(i=0;i<ncode;i++)codes[order[i]]=(unsigned char)ph_bits(3);
-    ph_huff(&ph_code,codes,19);
+    ph_huff(&ph_code,ph_codes,19);
     index=0;
     while(index<nlit+ndist) {
         int s=ph_symbol(&ph_code);
@@ -203,8 +206,8 @@ static int ph_block(void) {
         if(ph_bad)return 0;
     }
     if(!lengths[256])return 0;
-    ph_huff(&ph_lit,lengths,nlit);
-    ph_huff(&ph_dist,lengths+nlit,ndist);
+    ph_huff(&ph_lit,ph_lengths,nlit);
+    ph_huff(&ph_dist,ph_lengths+nlit,ndist);
     return 1;
 }
 static int ph_emit(unsigned c) {
@@ -216,7 +219,7 @@ static int ph_emit(unsigned c) {
 static int ph_inflate(void) {
     static const unsigned short lbase[29]={
         3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,19,23,27,31,
-        35,43,51,59,67,83,99,115,131,163,195,227,258
+        35,43,51,59,67,83,99,115,131,258
     };
     static const unsigned char lextra[29]={
         0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0
@@ -301,10 +304,10 @@ static unsigned ph_white(unsigned channel,unsigned a) {
     return (unsigned)(((unsigned long)channel*a+
                   (unsigned long)255*(255-a))/255UL);
 }
-static void ph_sample_row(unsigned row,unsigned *target_y) {
+static void ph_sample_row(unsigned row) {
     unsigned x;
-    while(*target_y<cv_codec_height &&
-          (unsigned)((unsigned long)(*target_y)*ph_height/cv_codec_height)==row) {
+    while(ph_target_y<cv_codec_height &&
+          (unsigned)((unsigned long)ph_target_y*ph_height/cv_codec_height)==row) {
         for(x=0;x<cv_codec_width;x++) {
             unsigned srcx=(unsigned)((unsigned long)x*ph_width/cv_codec_width);
             unsigned color=ph_sample(srcx,0);
@@ -338,9 +341,9 @@ static void ph_sample_row(unsigned row,unsigned *target_y) {
               default: r=g=b=0;
             }
             a=ph_alpha(srcx,color,r,g,b);
-            cv_codec_put(x,*target_y,ph_white(r,a),ph_white(g,a),ph_white(b,a));
+            cv_codec_put(x,ph_target_y,ph_white(r,a),ph_white(g,a),ph_white(b,a));
         }
-        (*target_y)++;
+        ph_target_y++;
     }
 }
 static unsigned ph_paeth(unsigned a,unsigned b,unsigned c) {
@@ -355,8 +358,7 @@ static unsigned ph_paeth(unsigned a,unsigned b,unsigned c) {
 }
 static int ph_decode_rows(void) {
     unsigned row,x,filter,raw,a,b,c,reconstructed;
-    unsigned outy=0;
-    unsigned char __far *temp;
+    ph_target_y=0;
     int cmf,flg;
     cmf=ph_next_zbyte();
     flg=ph_next_zbyte();
@@ -383,10 +385,10 @@ static int ph_decode_rows(void) {
             }
             ph_curr[x]=(unsigned char)(reconstructed&255);
         }
-        ph_sample_row(row,&outy);
-        temp=ph_curr;ph_curr=ph_prev;ph_prev=temp;
+        ph_sample_row(row);
+        ph_swap_ptr=ph_curr;ph_curr=ph_prev;ph_prev=ph_swap_ptr;
     }
-    return outy==cv_codec_height && !ph_bad;
+    return ph_target_y==cv_codec_height && !ph_bad;
 }
 static void ph_cleanup(void) {
     if(ph_currhandle && ph_curr) {
@@ -426,8 +428,6 @@ static int ph_alloc(void) {
 static int ph_init_png(void) {
     static const unsigned char sig[8]={137,80,78,71,13,10,26,10};
     unsigned i;
-    unsigned long length;
-    unsigned char name[5];
     int byte;
     ph_bad=0;
     ph_palette_count=0;
@@ -441,7 +441,8 @@ static int ph_init_png(void) {
         byte=ph_filebyte();
         if(byte<0 || byte!=sig[i])return 0;
     }
-    if(!ph_chunk(&length,name) || !ph_is(name,"IHDR") || length!=13)return 0;
+    if(!ph_chunk() || !ph_is(ph_chunk_name,"IHDR") ||
+       ph_chunk_size!=13)return 0;
     { unsigned long w=ph_be32(),h=ph_be32();
       if(w>8192UL || h>8192UL)return 0;
       ph_width=(unsigned)w;ph_height=(unsigned)h; }
@@ -470,15 +471,15 @@ static int ph_init_png(void) {
     if(!ph_bpp)ph_bpp=1;
     if(!ph_stride || ph_stride>32768)return 0;
     for(;;) {
-        if(!ph_chunk(&length,name))return 0;
-        if(ph_is(name,"IDAT")) {
+        if(!ph_chunk())return 0;
+        if(ph_is(ph_chunk_name,"IDAT")) {
             if(ph_type==3 && !ph_palette_count)return 0;
-            ph_idat_remaining=length;
+            ph_idat_remaining=ph_chunk_size;
             return 1;
         } else if(ph_is(name,"PLTE")) {
             unsigned j;
-            if(length==0 || length>768 || length%3)return 0;
-            ph_palette_count=(unsigned)(length/3);
+            if(ph_chunk_size==0 || ph_chunk_size>768 || ph_chunk_size%3)return 0;
+            ph_palette_count=(unsigned)(ph_chunk_size/3);
             for(j=0;j<ph_palette_count;j++) {
                 for(i=0;i<3;i++){
                     byte=ph_filebyte();
@@ -489,18 +490,18 @@ static int ph_init_png(void) {
         } else if(ph_is(name,"tRNS")) {
             unsigned j;
             if(ph_type==3) {
-                if(length>ph_palette_count)return 0;
-                for(j=0;j<(unsigned)length;j++) {
+                if(ph_chunk_size>ph_palette_count)return 0;
+                for(j=0;j<(unsigned)ph_chunk_size;j++) {
                     byte=ph_filebyte();
                     if(byte<0)return 0;
                     ph_palette[j][3]=(unsigned char)byte;
                 }
             } else if(ph_type==0) {
-                if(length!=2)return 0;
+                if(ph_chunk_size!=2)return 0;
                 ph_trns_gray=ph_be16();ph_gray_transparent=1;
                 if(ph_depth==16)ph_trns_gray>>=8;
             } else if(ph_type==2) {
-                if(length!=6)return 0;
+                if(ph_chunk_size!=6)return 0;
                 ph_trns_r=ph_be16();ph_trns_g=ph_be16();
                 ph_trns_b=ph_be16();
                 if(ph_depth==16){
@@ -508,7 +509,7 @@ static int ph_init_png(void) {
                 }
                 ph_rgb_transparent=1;
             } else {
-                if(!ph_skip(length))return 0;
+                if(!ph_skip(ph_chunk_size))return 0;
             }
         } else if(ph_is(name,"IEND"))return 0;
         else {
