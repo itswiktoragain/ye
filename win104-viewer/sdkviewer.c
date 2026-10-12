@@ -41,7 +41,6 @@ static unsigned char cv_header[8];
 static char open_path[PATH_CAP];
 static RECT paint_rect;
 /* No new C library calls that take pointers into SS: use data statics. */
-static WNDCLASS *wc_instance;
 
 long FAR PASCAL View104Proc(HWND h,unsigned msg,WORD wp,LONG lp);
 
@@ -138,7 +137,6 @@ static void draw_image(HDC dc,RECT __far *area) {
     unsigned screen_w,screen_h,draw_w,draw_h;
     unsigned x,y,sx,sy,run_start,previous,index;
     short off_x,off_y;
-    int ok;
     if(!pixels || !width || !height) return;
     screen_w=(unsigned)(area->right-area->left);
     if(area->bottom-area->top<=52)return;
@@ -281,6 +279,7 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR args,int show) {
         GetInstanceData(prev,(PSTR)app_title,sizeof(app_title));
         GetInstanceData(prev,(PSTR)command_help,sizeof(command_help));
         GetInstanceData(prev,(PSTR)file_path,sizeof(file_path));
+        GetInstanceData(prev,(PSTR)&path_length,sizeof(path_length));
         GetInstanceData(prev,(PSTR)app_status,sizeof(app_status));
     }
     /* Avoid child windows / modal dialogs until basic Win1 event handling
