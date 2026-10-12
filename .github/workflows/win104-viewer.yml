@@ -49,6 +49,18 @@ jobs:
           # PicoJPEG by Rich Geldreich, public domain / MIT, pinned source.
           curl -fsSL --retry 3 -o picojpeg.c https://raw.githubusercontent.com/richgel999/picojpeg/8ab33a909b4115ace4a952b7ffcb64c350f9298d/picojpeg.c
           curl -fsSL --retry 3 -o picojpeg.h https://raw.githubusercontent.com/richgel999/picojpeg/8ab33a909b4115ace4a952b7ffcb64c350f9298d/picojpeg.h
+          # PicoJPEG's historical (-1)<<n masks are undefined C signed shifts.
+          # Correct to an equivalent defined long arithmetic expression.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path("picojpeg.c")
+          data=p.read_text()
+          data,n=re.subn(r'\\(\\(-1\\)<<(\\d+)\\) \\+ 1',
+                         lambda m: f'(1L - (1L << {m.group(1)}))',data)
+          assert n==15, f'Unexpected picojpeg shift source: {n}'
+          p.write_text(data)
+          PY
           wcc $flags -fo=win104picker.obj win104picker.c
           wcc $flags -fo=codecs.obj codecs.c
           wcc $flags -fo=codec_jpeg.obj codec_jpeg.c
