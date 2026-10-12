@@ -4,7 +4,7 @@ Plus one JPEG using Pillow if installed in GitHub Actions.
 """
 import struct,zlib
 from pathlib import Path
-out=Path('win104-viewer/tests/fixtures')
+out=Path('tests/fixtures')
 out.mkdir(exist_ok=True,parents=True)
 def chunk(t,p):
     c=zlib.crc32(t+p)
