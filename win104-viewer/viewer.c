@@ -24,6 +24,9 @@
 
 static HINSTANCE instance;
 static HWND main_window, path_box;
+static HCURSOR app_cursor;
+static char app_class[] = "Chrono104";
+static unsigned paint_count = 0;
 static HGLOBAL image_handle;
 static int fit_image = 1;
 static char status_text[128] = "Enter a CV1 file path and select Open";
@@ -47,8 +50,17 @@ const unsigned char ega_rgb[16][3] = {
  {255,85,85}, {255,85,255}, {255,255,85}, {255,255,255}
 };
 
-long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam);
+long FAR PASCAL ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam);
 
+/* DOS-side startup trace, useful even if USER.EXE locks up. */
+static void trace_boot(const char *stage, int reset) {
+    FILE *logfile=fopen("CHRONO.LOG",reset ? "w" : "a");
+    if(logfile) {
+        fputs(stage,logfile);
+        fputc('\n',logfile);
+        fclose(logfile);
+    }
+}
 static void set_status(const char *msg) {
     /* Only short fixed strings or bounded edit-box contents reach here. */
     lstrcpy(status_text, msg);
@@ -143,11 +155,8 @@ static void toggle_fit(void) {
     if(main_window)InvalidateRect(main_window,(LPRECT)0,TRUE);
 }
 static void show_about(HWND h) {
-    MessageBox(h,
-      "ChronoView for Microsoft Windows 1.04\n"
-      "16-colour EGA CV1 image viewer\n"
-      "Convert modern images with convert.html on your phone.",
-      "About ChronoView",MB_OK);
+    (void)h;
+    set_status("ChronoView for Windows 1.04 - vintage EGA mode");
 }
 static void draw_picture(HDC dc, const RECT *rect) {
     HBRUSH colors[16];
@@ -208,17 +217,12 @@ static void draw_picture(HDC dc, const RECT *rect) {
     }
     for(i=0;i<16;i++) if(colors[i]) DeleteObject(colors[i]);
 }
-long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam) {
+long FAR PASCAL ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam) {
     PAINTSTRUCT ps;
     HDC dc;
     switch(msg) {
       case WM_CREATE:
         main_window=h;
-        path_box=CreateWindow("EDIT","C:\\IMAGE.CV1",
-          WS_CHILD|WS_VISIBLE|WS_BORDER|ES_AUTOHSCROLL,
-          5,5,280,21,h,(HMENU)ID_PATH,instance,(LPSTR)0);
-        CreateWindow("BUTTON","Open", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
-          291,5,51,21,h,(HMENU)ID_OPEN,instance,(LPSTR)0);
         return 0L;
       case WM_COMMAND:
         switch(wParam) {
@@ -229,12 +233,19 @@ long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lPa
         }
         break;
       case WM_SYSCOMMAND:
-        switch(wParam) {
-          case ID_FIT: toggle_fit(); return 0L;
-          case ID_ABOUT: show_about(h); return 0L;
-        }
+        return DefWindowProc(h,msg,wParam,lParam);
+      case WM_MOUSEMOVE:
+        if(app_cursor) SetCursor(app_cursor);
+        return 0L;
+      case WM_KEYDOWN:
+        if(wParam=='O' || wParam==VK_F3) { open_edit_path(); return 0L; }
+        if(wParam=='F' || wParam==VK_F4) { toggle_fit(); return 0L; }
         break;
       case WM_PAINT:
+        if(!paint_count) {
+            paint_count=1;
+            trace_boot("STEP 08 WM_PAINT entered",0);
+        }
         dc=BeginPaint(h,&ps);
         GetClientRect(h,&image_area);
         draw_picture(dc,&image_area);
@@ -256,44 +267,68 @@ long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lPa
 int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
     MSG message;
     HWND window;
-    HMENU system_menu;
+    HWND open_button;
+    HWND fit_button;
+    HWND about_button;
+    int got_message;
+    (void)show;
     instance=inst;
+    trace_boot("STEP 01 WinMain reached",1);
+    app_cursor=LoadCursor((HINSTANCE)0,IDC_ARROW);
+    trace_boot(app_cursor ? "STEP 02 cursor loaded" : "STEP 02 cursor missing",0);
     if(!prev) {
         memset(&window_class,0,sizeof(window_class));
         window_class.style=CS_HREDRAW|CS_VREDRAW;
         window_class.lpfnWndProc=(WNDPROC)ViewWndProc;
         window_class.hInstance=inst;
-        window_class.hIcon=LoadIcon(0,IDI_APPLICATION);
-        window_class.hCursor=LoadCursor(0,IDC_ARROW);
+        window_class.hIcon=LoadIcon(inst,MAKEINTRESOURCE(101));
+        if(!window_class.hIcon)
+            window_class.hIcon=LoadIcon((HINSTANCE)0,IDI_APPLICATION);
+        window_class.hCursor=app_cursor;
         window_class.hbrBackground=(HBRUSH)GetStockObject(WHITE_BRUSH);
-        window_class.lpszClassName="Chrono104";
+        window_class.lpszMenuName=(LPSTR)0;
+        window_class.lpszClassName=app_class;
+        trace_boot(window_class.hIcon ? "STEP 03 app icon loaded" : "STEP 03 app icon unavailable",0);
         if(!RegisterClass(&window_class)) {
-            MessageBox(0,"Unable to register window class",
-                       "ChronoView error",MB_OK);
-            return 0;
+            trace_boot("ERROR 04 RegisterClass failed (no MessageBox)",0);
+            return 1;
         }
+        trace_boot("STEP 04 RegisterClass succeeded",0);
     }
-    window=CreateWindow("Chrono104","ChronoView",
-         WS_TILEDWINDOW,0,0,480,300,
+    window=CreateWindow(app_class,"ChronoView",
+         WS_TILEDWINDOW,0,0,0,0,
          (HWND)0,(HMENU)0,inst,(LPSTR)0);
     if(!window) {
-        MessageBox(0,"Unable to create a tiled window",
-                   "ChronoView error",MB_OK);
-        return 0;
+        trace_boot("ERROR 05 CreateWindow failed (no MessageBox)",0);
+        return 2;
     }
     main_window=window;
-    system_menu=GetSystemMenu(window,FALSE);
-    if(system_menu) {
-        ChangeMenu(system_menu,0,(LPSTR)0,0,MF_APPEND|MF_SEPARATOR);
-        ChangeMenu(system_menu,0,"Fit / Actual size",ID_FIT,
-                   MF_APPEND|MF_STRING);
-        ChangeMenu(system_menu,0,"About ChronoView",ID_ABOUT,
-                   MF_APPEND|MF_STRING);
-    }
-    ShowWindow(window,show ? show : 1); /* Windows 1.x uses SHOW_OPENWINDOW=1 */
-    UpdateWindow(window);
+    trace_boot("STEP 05 main window created",0);
+
+    /* Windows 1.04 can behave unpredictably if child controls are created
+     * reentrantly inside the parent window's WM_CREATE. Do this afterward. */
+    path_box=CreateWindow("EDIT","C:\\IMAGE.CV1",
+         WS_CHILD|WS_VISIBLE|WS_BORDER|ES_AUTOHSCROLL,
+         5,5,205,21,window,(HMENU)ID_PATH,inst,(LPSTR)0);
+    open_button=CreateWindow("BUTTON","Open",
+         WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+         216,5,48,21,window,(HMENU)ID_OPEN,inst,(LPSTR)0);
+    fit_button=CreateWindow("BUTTON","Fit",
+         WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+         270,5,44,21,window,(HMENU)ID_FIT,inst,(LPSTR)0);
+    about_button=CreateWindow("BUTTON","About",
+         WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
+         320,5,52,21,window,(HMENU)ID_ABOUT,inst,(LPSTR)0);
+    trace_boot(path_box && open_button && fit_button && about_button ?
+        "STEP 06 controls created" : "STEP 06 some controls unavailable",0);
+
+    /* Never pass Win3.x nCmdShow values. Windows 1.x uses OPENWINDOW=1. */
+    ShowWindow(window,1);
+    trace_boot("STEP 07 ShowWindow completed, entering event loop",0);
+    /* UpdateWindow() can cause a synchronous WM_PAINT with a premature DS
+     * in old 16-bit Windows. Let GetMessage drive the first repaint. */
+    InvalidateRect(window,(LPRECT)0,TRUE);
     if(cmd && *cmd) {
-        /* Trim opening quote, if any. No Win3-only lstrcpyn import. */
         unsigned j=0;
         const char __far *start=cmd;
         if(*start=='"')start++;
@@ -302,9 +337,13 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
         if(path_box)SetWindowText(path_box,arg_path);
         if(arg_path[0])load_cv1(arg_path);
     }
-    while(GetMessage(&message,0,0,0)) {
+    for(;;) {
+        got_message=GetMessage(&message,(HWND)0,0,0);
+        if(!got_message)break;
+        if(got_message<0)break;
         TranslateMessage(&message);
         DispatchMessage(&message);
     }
+    trace_boot("STEP 09 event loop stopped",0);
     return (int)message.wParam;
 }
