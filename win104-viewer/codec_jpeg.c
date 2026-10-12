@@ -7,7 +7,6 @@
 
 static HFILE jpeg_file;
 static pjpeg_image_info_t jpeg_info;
-static unsigned char jpeg_read_buf[255];
 
 static unsigned char jpeg_need(unsigned char *dest,unsigned char requested,
                                unsigned char *actual,void *context) {
