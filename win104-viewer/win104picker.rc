@@ -5,7 +5,7 @@
  * so the native DlgDirList function enumerates DOS drives/directories. */
 CV_IDD_OPEN DIALOG 12, 12, 220, 160
 STYLE WS_POPUP | WS_DLGFRAME | WS_CAPTION
-CAPTION "Open CV1 image"
+CAPTION "Open image"
 BEGIN
     LTEXT         "Files and folders:", -1, 7, 5, 134, 10
     LISTBOX       CV_IDC_FILES, 7, 17, 140, 91, WS_BORDER | WS_VSCROLL | LBS_NOTIFY | WS_TABSTOP
