@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+extern unsigned cv_png_debug_stage,cv_png_debug_row;
+extern unsigned long cv_png_debug_output;
 static int check(char *path,char *format,int expected) {
     int f=open(path,O_RDONLY);
     unsigned result=0;
@@ -16,7 +18,7 @@ static int check(char *path,char *format,int expected) {
     else if(!strcmp(format,"jpg"))result=(unsigned)cv_decode_jpeg(f);
     close(f);
     if(!result) {
-        printf("%s: DECODE FAILED\n",path);
+        printf("%s: DECODE FAILED PNGstage=%u row=%u bytes=%lu\n",path,cv_png_debug_stage,cv_png_debug_row,cv_png_debug_output);
         return 1;
     }
     if(!cv_codec_pixels || !cv_codec_width || !cv_codec_height){
