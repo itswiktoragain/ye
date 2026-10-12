@@ -359,8 +359,8 @@ static unsigned ph_paeth(unsigned a,unsigned b,unsigned c) {
 }
 static int ph_decode_rows(void) {
     unsigned row,x,filter,raw,a,b,c,reconstructed;
-    ph_target_y=0;
     int cmf,flg;
+    ph_target_y=0;
     cmf=ph_next_zbyte();
     flg=ph_next_zbyte();
     if(cmf<0 || flg<0 || (cmf&15)!=8 || (cmf>>4)>7 ||
@@ -477,7 +477,7 @@ static int ph_init_png(void) {
             if(ph_type==3 && !ph_palette_count)return 0;
             ph_idat_remaining=ph_chunk_size;
             return 1;
-        } else if(ph_is(name,"PLTE")) {
+        } else if(ph_is(ph_chunk_name,"PLTE")) {
             unsigned j;
             if(ph_chunk_size==0 || ph_chunk_size>768 || ph_chunk_size%3)return 0;
             ph_palette_count=(unsigned)(ph_chunk_size/3);
@@ -488,7 +488,7 @@ static int ph_init_png(void) {
                     ph_palette[j][i]=(unsigned char)byte;
                 }
             }
-        } else if(ph_is(name,"tRNS")) {
+        } else if(ph_is(ph_chunk_name,"tRNS")) {
             unsigned j;
             if(ph_type==3) {
                 if(ph_chunk_size>ph_palette_count)return 0;
@@ -512,7 +512,7 @@ static int ph_init_png(void) {
             } else {
                 if(!ph_skip(ph_chunk_size))return 0;
             }
-        } else if(ph_is(name,"IEND"))return 0;
+        } else if(ph_is(ph_chunk_name,"IEND"))return 0;
         else {
             if(!ph_skip(ph_chunk_size))return 0;
         }
