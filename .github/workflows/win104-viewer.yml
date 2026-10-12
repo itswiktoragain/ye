@@ -40,8 +40,10 @@ jobs:
           export INCLUDE="$WATCOM/h;$WATCOM/h/win"
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
-          # Watcom real mode: 8086, 16-bit, Windows 1.0, independent SS/DS.
-          flags="-bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq"
+          # 8086 Windows1, independent SS/DS, explicit callback DGROUP reload.
+          # -s disables Watcom stack checker, which otherwise calls before
+          # __loadds has restored DS in an exported Windows 1.x WndProc.
+          flags="-bt=windows -ms -0 -zu -zw -bg -s -nt=_TEXT -dWINVER=0x0100 -wx -zq"
           wcc $flags -fo=sdkprobe.obj sdkprobe.c
           wcc $flags -fo=sdkviewer.obj sdkviewer.c
           wcc $flags -fo=minwin.obj minwin.c
@@ -105,22 +107,23 @@ jobs:
               b"CV1\x1a"+w.to_bytes(2,"little")+h.to_bytes(2,"little")+data)
           PY
           cat > win104-viewer/INSTALL.TXT <<'TXT'
-          ChronoView SDK-safe Windows 1.04 build
+          ChronoView Windows 1.04 main viewer: DGROUP repair build
 
           IMPORTANT: Make a clean snapshot and restart the guest from a
           cold power-off. Do not resume a RAM snapshot containing the crash.
 
-          1. Run MINWIN.EXE. It should exit instantly with no window.
-          2. Run SDKPROBE.EXE. Move its window around several times.
-             It should remain open with the title "ChronoView SDK Test"
-             and text "Window and text are working".
-          3. Only if step 2 works, run CHRONO.EXE.
-             O: open C:\IMAGE.CV1
+          1. Launch CHRONO.EXE directly from MS-DOS Executive.
+          2. Verify the title is "ChronoView". Move the window,
+             wait, and move it again before loading any image.
+          3. If it stays stable, press O to open C:\IMAGE.CV1.
              P: edit image path, Enter to open, Esc to cancel
              F: fit vs. actual size
              Q: exit
-          4. PNG, JPEG and WebP must be converted to indexed CV1
-             using convert.html in your modern phone/browser first.
+          4. Only if CHRONO crashes, test SDKPROBE.EXE to isolate
+             bare window/GDI compatibility. MINWIN.EXE optionally
+             checks Windows1 loader startup.
+          5. PNG/JPEG/WebP require CV1 conversion using convert.html
+             on your current phone/browser.
 
           Both GUI programs now use the 1985 Windows 1.01 SDK conventions:
           FAR PASCAL callback, zeroed LocalAlloc WNDCLASS,
