@@ -9,7 +9,7 @@ static char caption[]="ChronoView Win1 Probe";
 static char greeting[]="Windows 1.04 callback and text output OK";
 static WNDCLASS cls;
 
-long FAR PASCAL ProbeProc(HWND h,unsigned msg,WORD wp,LONG lp) {
+long FAR PASCAL __loadds ProbeProc(HWND h,unsigned msg,WORD wp,LONG lp) {
     PAINTSTRUCT ps;
     if(msg==WM_PAINT) {
         BeginPaint(h,&ps);
@@ -34,8 +34,7 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE previous,LPSTR args,int cmdShow) {
         cls.cbClsExtra=0;
         cls.cbWndExtra=0;
         cls.hInstance=inst;
-        cls.hIcon=LoadIcon(inst,MAKEINTRESOURCE(101));
-        if(!cls.hIcon) cls.hIcon=LoadIcon(0,IDI_APPLICATION);
+        cls.hIcon=LoadIcon(0,IDI_APPLICATION);
         cls.hCursor=LoadCursor(0,IDC_ARROW);
         cls.hbrBackground=(HBRUSH)GetStockObject(WHITE_BRUSH);
         cls.lpszMenuName=(LPSTR)0;
