@@ -26,7 +26,6 @@ static HINSTANCE instance;
 static HWND main_window, path_box;
 static HCURSOR app_cursor;
 static char app_class[] = "Chrono104";
-static unsigned paint_count = 0;
 static HGLOBAL image_handle;
 static int fit_image = 1;
 static char status_text[128] = "Enter a CV1 file path and select Open";
@@ -50,17 +49,10 @@ const unsigned char ega_rgb[16][3] = {
  {255,85,85}, {255,85,255}, {255,255,85}, {255,255,255}
 };
 
-long FAR PASCAL ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam);
+long FAR PASCAL __loadds ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam);
 
-/* DOS-side startup trace, useful even if USER.EXE locks up. */
-static void trace_boot(const char *stage, int reset) {
-    FILE *logfile=fopen("CHRONO.LOG",reset ? "w" : "a");
-    if(logfile) {
-        fputs(stage,logfile);
-        fputc('\n',logfile);
-        fclose(logfile);
-    }
-}
+/* Do not use DOS fopen/fwrite at startup. Windows 1.x may still own DOS
+ * services while MS-DOS Executive loads an application. */
 static void set_status(const char *msg) {
     /* Only short fixed strings or bounded edit-box contents reach here. */
     lstrcpy(status_text, msg);
@@ -269,37 +261,28 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
     int got_message;
     (void)show;
     instance=inst;
-    trace_boot("STEP 01 WinMain reached",1);
     app_cursor=LoadCursor((HINSTANCE)0,IDC_ARROW);
-    trace_boot(app_cursor ? "STEP 02 cursor loaded" : "STEP 02 cursor missing",0);
     if(!prev) {
         memset(&window_class,0,sizeof(window_class));
         window_class.style=CS_HREDRAW|CS_VREDRAW;
         window_class.lpfnWndProc=(WNDPROC)ViewWndProc;
         window_class.hInstance=inst;
-        window_class.hIcon=LoadIcon(inst,MAKEINTRESOURCE(101));
-        if(!window_class.hIcon)
-            window_class.hIcon=LoadIcon((HINSTANCE)0,IDI_APPLICATION);
+        window_class.hIcon=LoadIcon((HINSTANCE)0,IDI_APPLICATION);
         window_class.hCursor=app_cursor;
         window_class.hbrBackground=(HBRUSH)GetStockObject(WHITE_BRUSH);
         window_class.lpszMenuName=(LPSTR)0;
         window_class.lpszClassName=app_class;
-        trace_boot(window_class.hIcon ? "STEP 03 app icon loaded" : "STEP 03 app icon unavailable",0);
         if(!RegisterClass(&window_class)) {
-            trace_boot("ERROR 04 RegisterClass failed (no MessageBox)",0);
             return 1;
         }
-        trace_boot("STEP 04 RegisterClass succeeded",0);
     }
     window=CreateWindow(app_class,"ChronoView",
          WS_TILEDWINDOW,0,0,0,0,
          (HWND)0,(HMENU)0,inst,(LPSTR)0);
     if(!window) {
-        trace_boot("ERROR 05 CreateWindow failed (no MessageBox)",0);
         return 2;
     }
     main_window=window;
-    trace_boot("STEP 05 main window created",0);
 
     /* Windows 1.04 can behave unpredictably if child controls are created
      * reentrantly inside the parent window's WM_CREATE. Do this afterward. */
@@ -315,12 +298,10 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
     about_button=CreateWindow("BUTTON","About",
          WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
          320,5,52,21,window,(HMENU)ID_ABOUT,inst,(LPSTR)0);
-    trace_boot(path_box && open_button && fit_button && about_button ?
         "STEP 06 controls created" : "STEP 06 some controls unavailable",0);
 
     /* Never pass Win3.x nCmdShow values. Windows 1.x uses OPENWINDOW=1. */
     ShowWindow(window,1);
-    trace_boot("STEP 07 ShowWindow completed, entering event loop",0);
     /* UpdateWindow() can cause a synchronous WM_PAINT with a premature DS
      * in old 16-bit Windows. Let GetMessage drive the first repaint. */
     InvalidateRect(window,(LPRECT)0,TRUE);
@@ -339,12 +320,7 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
         if(got_message<0)break;
         TranslateMessage(&message);
         DispatchMessage(&message);
-        /* File I/O must not run from WM_PAINT while GDI is painting. */
-        if(message.message==WM_PAINT && !paint_count) {
-            paint_count=1;
-            trace_boot("STEP 08 WM_PAINT returned",0);
-        }
+    
     }
-    trace_boot("STEP 09 event loop stopped",0);
     return (int)message.wParam;
 }
