@@ -9,7 +9,6 @@
 static char probe_class[16]="CVSDK104";
 static char probe_title[26]="ChronoView SDK Test";
 static char probe_text[44]="Window and text are working";
-static WNDCLASS *probe_class_allocation;
 
 long FAR PASCAL SdkProbeProc(HWND h, unsigned message, WORD wp, LONG lp);
 
