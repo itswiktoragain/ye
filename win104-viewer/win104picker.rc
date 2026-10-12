@@ -1,0 +1,19 @@
+#include "windows.h"
+#include "win104picker.h"
+
+/* A 1985-style Open dialog. Windows 1.04 predates COMMDLG.DLL,
+ * so the native DlgDirList function enumerates DOS drives/directories. */
+CV_IDD_OPEN DIALOG 12, 12, 220, 160
+STYLE WS_POPUP | WS_DLGFRAME | WS_CAPTION
+CAPTION "Open CV1 image"
+BEGIN
+    LTEXT         "Files and folders:", -1, 7, 5, 134, 10
+    LISTBOX       CV_IDC_FILES, 7, 17, 140, 91, WS_BORDER | WS_VSCROLL | LBS_NOTIFY | WS_TABSTOP
+    LTEXT         "Current directory:", -1, 7, 109, 100, 9
+    LTEXT         "", CV_IDC_DIRECTORY, 7, 120, 140, 12
+    LTEXT         "File name:", -1, 7, 136, 40, 12
+    EDITTEXT      CV_IDC_FILENAME, 50, 135, 97, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON "Open", IDOK, 156, 20, 56, 17, WS_TABSTOP | WS_GROUP
+    PUSHBUTTON    "Cancel", IDCANCEL, 156, 43, 56, 17, WS_TABSTOP
+    PUSHBUTTON    "Refresh", CV_IDC_REFRESH, 156, 66, 56, 17, WS_TABSTOP
+END
