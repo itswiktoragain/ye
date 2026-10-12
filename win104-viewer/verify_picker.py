@@ -41,7 +41,7 @@ def validate(path):
     ident,template,flags=dialogs[0]
     assert ident==(0x8000|101), f"Unexpected dialog ID {ident:#x}"
     assert len(template)>50 and template[4]>=6, "File picker missing controls"
-    assert b"Open CV1 image" in template, "Wrong dialog caption"
+    assert b"Open image" in template, "Wrong dialog caption"
     # All native Win1 helpers must be present as ordinal relocations.
     names=ne+word(ne+0x2a)
     modtable=ne+word(ne+0x28)
