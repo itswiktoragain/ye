@@ -1,72 +1,70 @@
-# ChronoView for Windows 1.04
+# ChronoView — image viewer for Windows 1.04
 
-## Current build — 8086 kernel-file-I/O rewrite
+A tiny native **8086 / Windows 1.x** image viewer, built with Open Watcom's
+genuine `windows1` target.
 
-The earlier `CHRONO.EXE` builds caused severe Windows 1.04 guest instability:
-blank dialogs, damaged text, a hung MS-DOS Executive, and apparent DOS
-file-system failures until cold reboot. **Do not continue using those EXEs.**
+## What's new: blank canvas + Open… in the title-bar menu
 
-The current CHRONO.EXE has been rewritten in `win104safe.c`, **not**
-`viewer.c` or `sdkviewer.c`. The old files are kept for reference,
-not included in the current CHRONO link.
+The earlier viewer finally launched in Windows 1.04, but its permanent
+keyboard/path interface was awkward. This version preserves the working
+CV1 pixel loader and replaces the interface with:
 
-### What changed
+- **Completely white canvas when you open the app.**
+- Click the **Windows 1.04 title-bar system menu → Open…**.
+- A period-correct file chooser with a list of **.CV1 images**, **folders**,
+  **DOS drive letters**, a filename field, Open, Cancel and Refresh.
+- Click a file and choose Open, or double-click a file to render it.
+- Double-click a folder or drive to browse into it.
+- **Clear** returns to white and **Fit image** toggles scaling.
+- **O** remains an optional keyboard shortcut for Open, not the primary UI.
 
-- Removed `stdio.h`, `fopen`, `fread`, `fgetc`, `_dos_open` and the
-  large DOS-oriented C file I/O implementation from the viewer.
-- Uses Windows **1.x KERNEL._lopen, KERNEL._lread, KERNEL._lclose**
-  to load CV1 image bytes (checked as ordinal imports 85, 82, 81).
-- Never opens or writes a file during startup or routine repaint.
-- Restores the app data segment with `FAR PASCAL __loadds`, exports the
-  callback, and validates the resulting NE relocation in CI.
-- Disables the Watcom stack-checker call that previously preceded
-  the callback's DS restoration.
-- Uses a single tiled window, with no child controls, resources, dialogs
-  or dynamic GDI allocations during painting.
-- Rejects second instances to avoid copying state from a hung process.
-- Caps images at **16,384 16-colour EGA pixels** to reduce 16-bit pressure.
-- Includes a host-side PNG/JPEG/WebP-to-CV1 converter.
+**Windows 1.04 has no modern Common Dialog library**. File selection is built
+with the original `GetSystemMenu`, `ChangeMenu`, `DialogBox`,
+`DlgDirList` and `DlgDirSelect` APIs. A real `RT_DIALOG` resource is
+embedded in `CHRONO.EXE`.
 
-The Open Watcom Windows1 startup routine still contains its normal DOS
-version check and process-exit instructions. The code does **not** perform
-raw DOS file operations when opening images.
+## Files and formats
 
-### Testing
+The guest-side `CHRONO.EXE` loads indexed 16-color **CV1** files, up to
+16,384 pixels. For **PNG, JPEG, WebP**, use the companion **convert.html**
+offline on a modern browser, then transfer the resulting `.CV1` to the
+emulated DOS drive. The old operating system cannot directly decode these
+modern formats with this build.
 
-**This is statically verified, not Windows 1.04 emulator-verified.**
-Compiled with Open Watcom's genuine `system windows1` linker target,
-8086 CPU, non-discardable movable code, and no compiler warnings. CI
-checks the Windows 1.00 NE header, Win1 imports, DGROUP callback relocation,
-and absence of the unwanted DOS-oriented file I/O handlers in the map.
+The converter preserves aspect ratio while reducing image size and converts
+colors to the standard EGA 16-color palette.
 
-Always make a disposable VM snapshot before testing. Power off the virtual
-machine fully after a crash; do not restore its corrupted saved RAM.
+## Installation and use
 
-Copy `CHRONO.EXE` and `IMAGE.CV1` to an emulated DOS drive. Launch
-`CHRONO.EXE`, then first verify it can remain open and be moved around
-safely. Press **O** to open `C:\\IMAGE.CV1`. **P** edits the file path,
-**F** toggles fit, **Q** exits. If you need a modern photo, open
-`convert.html` on your phone and convert to CV1 before transferring it.
+1. Put `CHRONO.EXE` and `IMAGE.CV1` onto your emulated DOS drive.
+2. Start Windows 1.04 from a **clean cold boot** and launch `CHRONO.EXE`.
+3. Its window should be white; open the **title-bar menu → Open…**.
+4. Choose `IMAGE.CV1` (from the file list), then click Open.
+5. The image displays in the viewer. Use **Clear** to make it white again.
 
-If it freezes without any image being opened, **do not repeatedly launch**
-it. This would point to the Windows 1.x ABI/loader/message-loop path,
-not the CV1 decoder, and needs a targeted emulator test.
+Use a disposable emulator snapshot when testing experimental Win1 software;
+earlier versions had serious 16-bit memory/callback bugs.
 
-### Limitations
+## Code and build
 
-The Windows 1.04 executable itself does **not** decode PNG/JPEG/WebP.
-It accepts the companion 16-colour CV1 format. The browser converter
-supports modern image formats and constrains them to the viewer's
-16,384-pixel limit.
+- `win104picker.c` — **current** white-canvas window and native file picker
+- `win104picker.rc` / `win104picker.h` — 1985-compatible modal picker template
+- `win104safe.c` — last boot-confirmed viewer, kept as a fallback
+- `verify_ne.py` — Windows 1.x NE format and imported ordinal checks
+- `verify_picker.py` — checks `RT_DIALOG`, dialog APIs, and both callback DGROUP relocations
+- `convert.html` — modern photo to DOS CV1 conversion
+- `.github/workflows/win104-viewer.yml` — complete reproducible build
 
-### Build sources
+The GitHub Actions workflow checks the Windows 1.00 NE target header, permitted
+Win1 USER/KERNEL/GDI imports, actual dialog resource, and memory-relocation
+code for the window **and** dialog callbacks. It prevents DOS-oriented CRT
+file-reading routines from being linked. The image loader uses Windows 1.x
+`KERNEL._lopen`, `_lread`, and `_lclose`.
 
-- `win104safe.c` — **current native Win1 viewer source**
-- `verify_ne.py` — static Windows 1.x binary validator
-- `convert.html` — offline converter for modern PNG/JPEG/WebP
-- `.github/workflows/win104-viewer.yml` — GitHub Actions build
-- `viewer.c`, `sdkviewer.c`, `inflate.c` — obsolete/experimental source,
-  not linked into current CHRONO.EXE
+**CI build/static verification is not an actual Windows 1.04 emulator test.**
+The new file dialog still needs a test on the target guest.
 
-Original API references: [Microsoft's Windows 1.01 SDK sample](https://github.com/joncampbell123/doslib/tree/master/mssample/win1.01/C)
-and [Open Watcom's Windows 1.x target](https://github.com/open-watcom/open-watcom-v2).
+Period API references:
+[Microsoft Windows 1.01 SDK examples](https://github.com/joncampbell123/doslib/tree/master/mssample/win1.01/C)
+and [MS Windows 3.0 SDK file-open example](https://www.pcjs.org/documents/books/mspl13/win/w3guide/)
+(using early `DlgDirList` and `DlgDirSelect`).
