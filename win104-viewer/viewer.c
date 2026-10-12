@@ -1,7 +1,7 @@
 /* ChronoView for Microsoft Windows 1.04.
  * Compile for 8086 real mode, WINVER=0x0100, with -zu -zw.
  * Link with 'system windows1', not the default 'windows' target.
- * WndProc MUST be exported and use FAR PASCAL __loadds.
+ * WndProc MUST be exported FAR PASCAL, following the Windows 1.03 SDK.
  * No Windows 2.x/3.x APIs are intentionally imported.
  *
  * Images use the compact 16-colour indexed CV1 format, converted from
@@ -242,10 +242,6 @@ long FAR PASCAL ViewWndProc(HWND h, unsigned msg, WORD wParam, LONG lParam) {
         if(wParam=='F' || wParam==VK_F4) { toggle_fit(); return 0L; }
         break;
       case WM_PAINT:
-        if(!paint_count) {
-            paint_count=1;
-            trace_boot("STEP 08 WM_PAINT entered",0);
-        }
         dc=BeginPaint(h,&ps);
         GetClientRect(h,&image_area);
         draw_picture(dc,&image_area);
@@ -343,6 +339,11 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
         if(got_message<0)break;
         TranslateMessage(&message);
         DispatchMessage(&message);
+        /* File I/O must not run from WM_PAINT while GDI is painting. */
+        if(message.message==WM_PAINT && !paint_count) {
+            paint_count=1;
+            trace_boot("STEP 08 WM_PAINT returned",0);
+        }
     }
     trace_boot("STEP 09 event loop stopped",0);
     return (int)message.wParam;
