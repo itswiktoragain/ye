@@ -59,6 +59,21 @@ jobs:
           data,n=re.subn(r'\(\(-1\)<<(\d+)\) \+ 1',
                          lambda m: f'(1L - (1L << {m.group(1)}))',data)
           assert n==15, f'Unexpected picojpeg shift source: {n}'
+          # Watcom real-mode Windows puts stack locals in SS, not DS.
+          # These address-taken locals must be static or the tiny decoder
+          # would truncate SS pointers passed to its near-pointer helpers.
+          fixes=[
+              ("readDHTMarker", "uint8 bits[16]"),
+              ("locateSOFMarker", "uint8 c"),
+              ("locateSOSMarker", "uint8 c"),
+              ("findEOI", "uint8 c"),
+              ("initScan", "uint8 foundEOI"),
+          ]
+          for func,decl in fixes:
+              pattern=r'(static uint8 '+func+r'\([^)]*\)\s*\{\s*)'+re.escape(decl)+r';'
+              data,n=re.subn(pattern,lambda m: m.group(1)+'static '+decl+';',data)
+              assert n==1, f'PicoJPEG SS/DS static pointer repair failed for {func}: {n}'
+
           p.write_text(data)
           PY
           wcc $flags -fo=win104picker.obj win104picker.c
