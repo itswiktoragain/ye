@@ -105,6 +105,24 @@ jobs:
           file SDKPROBE.EXE CHRONO.EXE MINWIN.EXE
           ls -lh SDKPROBE.EXE CHRONO.EXE MINWIN.EXE
 
+      - name: Run actual PNG and JPEG decoder regression tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd win104-viewer
+          python3 -m venv /tmp/chrono-pil
+          /tmp/chrono-pil/bin/pip -q install pillow
+          /tmp/chrono-pil/bin/python tests/make_fixtures.py
+          cc -std=c99 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+             -Itests -I. tests/hostcodec.c codecs.c codec_png.c codec_jpeg.c \
+             picojpeg.c -o /tmp/chronocodec-test
+          ASAN_OPTIONS=detect_leaks=1 /tmp/chronocodec-test \
+             png tests/fixtures/rgb.png 1600 \
+             png tests/fixtures/indexed.png 1920 \
+             png tests/fixtures/stored.png 0 \
+             png tests/fixtures/rgba.png 0 \
+             jpg tests/fixtures/baseline.jpg -1
+
       - name: Verify Win1 module imports and NE formats
         run: |
           set -euo pipefail
