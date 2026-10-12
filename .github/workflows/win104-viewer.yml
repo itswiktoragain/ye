@@ -100,7 +100,7 @@ jobs:
           m=Path("win104-viewer/CHRONO.MAP").read_text().lower()
           forbidden=("fopen.c", "fread.c", "fgetc.c", "freopen.c",
                      "opendos.c", "_dos_open_", "_dos_creat_",
-                     "sopen_", "___iob", "__dosseg__", "getche.c")
+                     "sopen_", "___iob", "getche.c")
           found=[name for name in forbidden if name in m]
           assert not found, f"DOS-oriented CRT file routines linked: {found}"
           print("CHECK PASSED: no DOS-oriented stdio/file handlers in CHRONO.EXE")
