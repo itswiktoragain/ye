@@ -43,9 +43,9 @@ jobs:
           # 8086 Windows1, independent SS/DS, explicit callback DGROUP reload.
           # -s disables Watcom stack checker, which otherwise calls before
           # __loadds has restored DS in an exported Windows 1.x WndProc.
-          flags="-bt=windows -ms -0 -zu -zw -bg -s -nt=_TEXT -dWINVER=0x0100 -wx -zq"
+          flags="-bt=windows -ms -0 -zu -zw -bg -s -nt=_TEXT -dWINVER=0x0100 -wx -we -zq"
           wcc $flags -fo=sdkprobe.obj sdkprobe.c
-          wcc $flags -fo=sdkviewer.obj sdkviewer.c
+          wcc $flags -fo=win104safe.obj win104safe.c
           wcc $flags -fo=minwin.obj minwin.c
 
           cat > sdkprobe.lnk <<'LINK'
@@ -64,11 +64,11 @@ jobs:
           cat > sdkviewer.lnk <<'LINK'
           system windows1
           name CHRONO.EXE
-          file sdkviewer.obj
-          EXPORT View104Proc.1 PRIVATE RESIDENT
+          file win104safe.obj
+          EXPORT ChronoWndProc.1 PRIVATE RESIDENT
           segment TYPE CODE MOVEABLE
           segment TYPE DATA MOVEABLE
-          option stack=4096
+          option stack=6144
           option heapsize=2048
           option map=CHRONO.MAP
           LINK
@@ -95,6 +95,16 @@ jobs:
           python3 win104-viewer/verify_ne.py win104-viewer/SDKPROBE.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/MINWIN.EXE
+          python3 - <<'PY'
+          from pathlib import Path
+          m=Path("win104-viewer/CHRONO.MAP").read_text().lower()
+          forbidden=("fopen.c", "fread.c", "fgetc.c", "freopen.c",
+                     "opendos.c", "_dos_open_", "_dos_creat_",
+                     "sopen_", "___iob", "__dosseg__", "getche.c")
+          found=[name for name in forbidden if name in m]
+          assert not found, f"DOS-oriented CRT file routines linked: {found}"
+          print("CHECK PASSED: no DOS-oriented stdio/file handlers in CHRONO.EXE")
+          PY
 
       - name: Make small 1985-compatible test picture
         shell: bash
@@ -107,36 +117,37 @@ jobs:
               b"CV1\x1a"+w.to_bytes(2,"little")+h.to_bytes(2,"little")+data)
           PY
           cat > win104-viewer/INSTALL.TXT <<'TXT'
-          ChronoView Windows 1.04 main viewer: DGROUP repair build
+          ChronoView Windows 1.04: new native-file-API build
 
-          IMPORTANT: Make a clean snapshot and restart the guest from a
-          cold power-off. Do not resume a RAM snapshot containing the crash.
+          CAUTION: Previously-built CHRONO.EXE versions corrupted memory.
+          Use a disposable VM snapshot. Power OFF fully before testing.
 
-          1. Launch CHRONO.EXE directly from MS-DOS Executive.
-          2. Verify the title is "ChronoView". Move the window,
-             wait, and move it again before loading any image.
-          3. If it stays stable, press O to open C:\IMAGE.CV1.
-             P: edit image path, Enter to open, Esc to cancel
-             F: fit vs. actual size
-             Q: exit
-          4. Only if CHRONO crashes, test SDKPROBE.EXE to isolate
-             bare window/GDI compatibility. MINWIN.EXE optionally
-             checks Windows1 loader startup.
-          5. PNG/JPEG/WebP require CV1 conversion using convert.html
-             on your current phone/browser.
+          1. Copy CHRONO.EXE and IMAGE.CV1 into C:\\ (emulated drive).
+          2. Start Windows 1.04 from cold power-on.
+          3. Launch CHRONO.EXE through MS-DOS Executive.
+          4. Check that window title says "ChronoView". Move the window
+             around several times before opening the test image.
+          5. Press O to load the test file C:\\IMAGE.CV1.
+          6. Press P to edit the DOS path. Enter saves, Esc restores.
+             Press F to toggle Fit. Press Q to close.
+          7. Host-side convert.html converts PNG/JPEG/WebP to 16-colour
+             CV1, at 16384 pixels maximum, for this build.
 
-          Both GUI programs now use the 1985 Windows 1.01 SDK conventions:
-          FAR PASCAL callback, zeroed LocalAlloc WNDCLASS,
-          GetInstanceData for multiple running copies, no custom icon,
-          no child windows, no startup disk writes, and no discardable code.
+          File handling now uses native Windows 1.x KERNEL._lopen,
+          _lread and _lclose. No fopen, fread, fgetc, _dos_open,
+          DOS interrupt, custom window icon, modal startup dialog,
+          or second-instance data copy is used by the viewer.
 
-          GitHub verifies the linker and executable structure but an
-          actual Windows 1.04 emulator boot/move test has not been done.
+          The code is compiled for 8086 Windows1 with a resident
+          __loadds callback; binary relocation and import-table checks
+          pass at build time. Windows 1.04 emulator execution has NOT
+          been verified. If launching causes a freeze, stop and send
+          the behavior; do not repeatedly relaunch on the same guest.
           TXT
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CHRONOVIEW-104-SDK-SAFE
+          name: CHRONOVIEW-104-KERNEL-IO-REWRITE
           path: |
             win104-viewer/MINWIN.EXE
             win104-viewer/SDKPROBE.EXE
