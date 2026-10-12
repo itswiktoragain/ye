@@ -95,9 +95,10 @@ jobs:
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
           # 8086, small model, separate DS/SS, never assume SS==DS:
-          wrc -q -r -10 -bt=windows -fo=CHRONO.RES CHRONO.RC
+          # For boot isolation, temporarily exclude custom resources entirely.
           wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=viewer.obj viewer.c
           wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=probe.obj probe.c
+          wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=minwin.obj minwin.c
           cat > viewer.lnk <<'LINK'
           system windows1
           name CHRONO.EXE
@@ -108,7 +109,6 @@ jobs:
           option stack=8192
           option heapsize=4096
           option map=CHRONO.MAP
-          option resource=CHRONO.RES
           LINK
           wlink @viewer.lnk
           cat > probe.lnk <<'LINK'
@@ -121,11 +121,21 @@ jobs:
           option stack=4096
           option heapsize=2048
           option map=PROBE.MAP
-          option resource=CHRONO.RES
           LINK
           wlink @probe.lnk
-          file CHRONO.EXE PROBE.EXE
-          ls -l CHRONO.EXE PROBE.EXE CHRONO.MAP PROBE.MAP
+          cat > minwin.lnk <<'LINK'
+          system windows1
+          name MINWIN.EXE
+          file minwin.obj
+          segment TYPE CODE PRELOAD MOVEABLE DISCARDABLE SHARED
+          segment TYPE DATA PRELOAD MOVEABLE
+          option stack=4096
+          option heapsize=1024
+          option map=MINWIN.MAP
+          LINK
+          wlink @minwin.lnk
+          file CHRONO.EXE PROBE.EXE MINWIN.EXE
+          ls -l CHRONO.EXE PROBE.EXE MINWIN.EXE CHRONO.MAP PROBE.MAP MINWIN.MAP
 
       - name: Verify NE imports, target and real-mode compatibility
         shell: bash
@@ -133,6 +143,7 @@ jobs:
           set -euo pipefail
           python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/PROBE.EXE
+          python3 win104-viewer/verify_ne.py win104-viewer/MINWIN.EXE
 
       - name: Package EXE with test image
         shell: bash
@@ -147,32 +158,40 @@ jobs:
           PY
           cd win104-viewer
           cat > INSTALL.TXT <<'TXT'
-          ChronoView startup repair for Windows 1.04 (8086)
+          CHRONOVIEW: Windows 1.04 loader-freeze diagnostic build
 
-          1. Copy PROBE.EXE, CHRONO.EXE, and IMAGE.CV1 into the
-             emulated Windows 1.04 DOS drive (e.g., C:\\).
-          2. Run PROBE.EXE first. It must show a simple tiled
-             "ChronoView Win1 Probe" window with a short text line.
-             If PROBE.EXE crashes, the issue is in the 16-bit loader,
-             runtime, Windows installation, or emulator.
-          3. Run CHRONO.EXE.
-             The image viewer has a path box and an Open button.
-          4. Enter C:\\IMAGE.CV1 and click Open.
-          5. If Windows hangs, check CHRONO.LOG next to where
-             CHRONO.EXE was started. The last STEP/ERROR identifies
-             which startup call was reached. Include the log if reporting.
-          6. Convert PNG/JPEG/WebP with convert.html on your
-             phone and transfer the resulting CV1 file.
+          This build makes NO DOS file writes while starting up and includes
+          a progression of three executables to pinpoint the freeze.
 
-          Build verified by GitHub Actions, not boot-tested on Windows 1.04.
+          1. Restart your Windows 1.04 emulator after the previous freeze.
+          2. Copy MINWIN.EXE, PROBE.EXE, CHRONO.EXE, and IMAGE.CV1
+             to a writable C:\ DOS directory visible to Windows 1.04.
+          3. Run MINWIN.EXE from MS-DOS Executive.
+             It should return IMMEDIATELY to MS-DOS Executive, no window.
+             If this hangs, STOP. Loader/CRT compatibility failed before
+             any GUI or image viewer functions. Tell us "MINWIN freezes".
+          4. If MINWIN succeeds, launch PROBE.EXE.
+             A tiled blank/white window with the text
+             "Windows 1.04 callback and text output OK" should appear.
+             If it hangs, STOP. Tell us "MINWIN works, PROBE freezes".
+          5. If both work, launch CHRONO.EXE.
+             Enter C:\IMAGE.CV1 in its path field and click Open.
+             If CHRONO freezes, reply "PROBE works, CHRONO freezes".
+          6. PNG/JPEG/WebP can be converted to CV1 on your phone
+             using the included convert.html (no network required).
+
+          This artifact was compiled for the real Windows1/8086 linker
+          and statically checked. No Windows 1.04 emulator was available
+          during its construction; runtime success is not yet verified.
           TXT
 
       - name: Upload runnable files
         uses: actions/upload-artifact@v4
         with:
-          name: CHRONOVIEW-WIN104-STARTUP-REPAIR
+          name: CHRONOVIEW-WIN104-LOADER-DIAGNOSTICS
           path: |
             win104-viewer/CHRONO.EXE
+            win104-viewer/MINWIN.EXE
             win104-viewer/PROBE.EXE
             win104-viewer/IMAGE.CV1
             win104-viewer/INSTALL.TXT
