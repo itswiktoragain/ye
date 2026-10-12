@@ -1,63 +1,58 @@
-# ChronoView / Microsoft Windows 1.04 (1987)
+# ChronoView - Windows 1.04 native image viewer
 
-**Experimental native 16-bit Windows 1.0 application**, not a Windows 3.x app.
+This project creates genuine 8086 / Windows 1.x **New Executable (NE)** files, with the
+**Open Watcom `system windows1`** target, original 1985-style icon resources,
+8086 instructions and only early Windows USER/GDI/KERNEL imports.
 
-The first `CHRONO.EXE` build falsely claimed to target Windows 1.0 after being
-linked as Windows 3.0. It imported newer USER APIs and could crash on launch.
+## Blank dialog / Windows hang repair (October 2026)
 
-This revision compiles with **Open Watcom's real `system windows1` linker target**,
-an explicit 8086 CPU and Windows 1.0 API target, `-zu -zw` for Windows real-mode
-SS/DS differences, and a resident exported window procedure with
-`FAR PASCAL __loadds`. It uses `ChangeMenu` instead of
-Windows 3.x `AppendMenu` / `CreatePopupMenu`.
+A Windows 1.04 test showed a **blank message box with an OK button**, then a freeze.
+The earlier binary used Windows APIs and initialization patterns that were too risky
+for Windows 1.x. The follow-up rebuild:
 
-The CI job includes a static NE import check to reject unsupported
-newer APIs and creates a test image. The build also uses *zero* pointer
-truncations into the 16-bit C runtime.
+- Removes all startup `MessageBox` calls (the previous blank dialog)
+- Uses an original Windows 1.03 SDK-style FAR PASCAL window procedure, exported resident
+- Links to `windows1`, using `-0 -zu -zw -bg` and separate real-mode code/data segments
+- Uses an authentic **64x64 monochrome 1985-style ICO** resource
+- Defers Edit/Button control creation until after the parent window exists
+- Avoids synchronous `UpdateWindow` during startup
+- Creates `CHRONO.LOG` with numbered steps when launched from a writable DOS directory
+- Includes a separate lightweight `PROBE.EXE` to test GUI loader and GDI text rendering
+- Verifies PE/NE headers and imports in GitHub Actions and treats compiler warnings as errors
 
-## Downloads
+## Download
 
-Open the [GitHub Actions workflow](https://github.com/itswiktoragain/ye/actions/workflows/win104-viewer.yml)
-and select the newest successful run of the `agent/win104-image-viewer` branch.
-Download `CHRONOVIEW-WIN104-8086`, containing:
+On a phone, open [latest GitHub Actions build](https://github.com/itswiktoragain/ye/actions/workflows/win104-viewer.yml) and download
+`CHRONOVIEW-WIN104-STARTUP-REPAIR`.
 
-- `CHRONO.EXE` - native Windows 1.04 image viewer
-- `IMAGE.CV1` - small built-in 16-color test image
-- `INSTALL.TXT` - setup instructions
+Package includes `CHRONO.EXE`, `PROBE.EXE`, `IMAGE.CV1`, `convert.html` and `INSTALL.TXT`.
 
-## Windows 1.04 usage
+## How to diagnose
 
-Copy `CHRONO.EXE` and `IMAGE.CV1` into the same emulated DOS drive,
-for example `C:\\`.
+1. Copy `PROBE.EXE`, `CHRONO.EXE` and `IMAGE.CV1` to a writable disk visible in Windows 1.04.
+2. Launch **PROBE.EXE** from MS-DOS Executive. It should open a tiled window that says
+   `Windows 1.04 callback and text output OK` on the screen.
+3. Close the probe and launch **CHRONO.EXE**.
+4. It should show a text path box and Open / Fit / About buttons.
+5. Type `C:\\IMAGE.CV1` and click **Open**. Alternatively launch CHRONO with the image path as an argument.
+6. If the viewer hangs, check the file `CHRONO.LOG` in its launch directory.
+   Its final STEP number helps distinguish class registration, window creation,
+   child controls, or WM_PAINT. Share the last line with the emulator name.
 
-Start `CHRONO.EXE` from MS-DOS Executive. The window contains a
-path text field and an Open button. Enter `C:\\IMAGE.CV1`, click **Open**,
-and the test image should appear. The system menu has a Fit / Actual size toggle.
+**There has been no actual Windows 1.04 emulator boot test in this workflow.**
+The CI checks establish a real 16-bit Win1 NE binary, not proof of runtime success.
 
-### PNG, JPEG and WebP
+## Image support
 
-These codecs are **not yet compiled into the Windows 1.04 EXE**.
-Use `convert.html` in a modern browser (including your Android phone)
-to convert any PNG, JPEG or WebP to `CV1` and transfer the CV1 file
-to the emulated DOS disk. Conversion is local, no image upload needed.
+The 16-bit executable directly reads small 16-colour **CV1** images (up to
+60,000 pixels); it **does not natively decode PNG, JPEG or WebP**. The phone-side
+`convert.html` supports those modern formats using a browser decoder, reduces
+them to indexed CV1, and makes the image available to be copied into the
+emulator's DOS disk.
 
-The modern-side converter automatically reduces images to at most
-**60,000 16-color pixels** (maximum width 640, height 480).
-This is necessary because a real-mode 16-bit segment cannot store
-hundreds of thousands of pixels at once.
+Native codec support for all three modern formats is a separate
+work item, not included in this bug fix. The unlinked `inflate.c` is an
+experimental DEFLATE component, not a production PNG decoder.
 
-## Source
-
-- `viewer.c`: 1980s API-only Win16 GUI and CV1 image renderer
-- `convert.html`: phone/browser-side modern codec converter
-- `verify_ne.py`: static NE header and imported ordinal verifier
-- `inflate.c`: unlinked work-in-progress DEFLATE decoder (not available yet)
-- `.github/workflows/win104-viewer.yml`: reproducible build
-
-Background and Windows 1.0 toolchain reference:
-[joncampbell123/doslib](https://github.com/joncampbell123/doslib/tree/master/windows/exmenus) and
-[NCommander's annotated official Windows 1.03 Hello sample](https://github.com/NCommander/win1-hello-world-annotations).
-
-**Build-verified, not emulator-verified.** A Windows 1.04 boot test remains
-necessary to prove runtime compatibility. Do not infer successful boot merely
-from a compliant NE header or import table.
+Sources: [Microsoft Windows 1.03 Hello sample as annotated by NCommander](https://github.com/NCommander/win1-hello-world-annotations)
+and [doslib Windows 1.0 cross-build examples](https://github.com/joncampbell123/doslib/tree/master/windows/hello).
