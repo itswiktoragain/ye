@@ -31,40 +31,58 @@ jobs:
           7z x -y -o"$HOME/watcom" /tmp/ow-linux-x64 >/dev/null
           chmod -R u+rx "$HOME/watcom/binl64" "$HOME/watcom/binl"
 
-      - name: Generate authentic 1985 Windows 1.x monochrome ICO
+      - name: Create compiler-compatible vintage icon container
         shell: bash
         run: |
           python3 - <<'PY'
+          import struct
           from pathlib import Path
-          # The actual Windows 1.0 SDK used 14-byte icon headers and
-          # 64x64 1-bit XOR+AND masks (1038 bytes), not modern ICO containers.
-          # Header matches the format of the official Windows 1.03 HELLO.ICO.
-          header=bytes.fromhex("0100000000004000400008000000")
-          def pixel(x,y):
-              body=(12<=x<53 and 23<=y<50)
-              top=(19<=x<31 and 16<=y<24)
-              d=(x-32)**2 + (y-36)**2
-              ring=(54<=d<=104)
-              lens=(d<=32)
-              flash=(43<=x<50 and 26<=y<31)
-              return body or top, ring or lens or flash
-          xor=bytearray()
-          andmask=bytearray()
-          for y in range(64):
-              ink=bytearray(8)
-              transparency=bytearray([255]*8)
-              for x in range(64):
-                  opaque,contrast=pixel(x,y)
-                  if opaque:
-                      transparency[x//8] &= ~(1 << (7-(x%8)))
-                      if contrast or x in (12,52) or y in (23,49):
-                          ink[x//8] |= 1 << (7-(x%8))
-              xor.extend(ink)
-              andmask.extend(transparency)
-          icon=header+bytes(xor)+bytes(andmask)
-          assert len(icon)==1038
-          Path("win104-viewer/CHRONO.ICO").write_bytes(icon)
-          print("Authentic Windows 1.x icon:",len(icon),"bytes")
+
+          # WRC's -10 option converts modern ICO containers to Windows 1.0
+          # NE resources. Feed it 4bpp and 1bpp historical-compatible sizes.
+          ega=[(0,0,0),(0,0,170),(0,170,0),(170,0,0),
+               (170,0,170),(170,85,0),(170,170,170),(255,255,255),
+               (85,85,85),(85,85,255),(85,255,85),(85,255,255),
+               (255,85,85),(255,85,255),(255,255,85),(255,255,255)]
+          def icon_image(w,depth):
+              rows=[]
+              masks=[]
+              pad=lambda b: b + bytes((-len(b))%4)
+              for y in reversed(range(w)):
+                  pixel=[]
+                  mask=bytearray((w+7)//8)
+                  for x in range(w):
+                      xx=x*64//w; yy=y*64//w
+                      body=(12<=xx<=52 and 23<=yy<=49)
+                      top=(19<=xx<=30 and 16<=yy<=23)
+                      inside=body or top
+                      d=(xx-32)**2+(yy-36)**2
+                      lens=d<90
+                      border=xx in (12,52) or yy in (23,49)
+                      if not inside: mask[x//8] |= 1 << (7-x%8)
+                      shade=0 if border else (15 if lens else (12 if inside else 0))
+                      pixel.append(shade)
+                  if depth==4:
+                      row=bytes((pixel[x]<<4)|pixel[x+1] for x in range(0,w,2))
+                  else:
+                      row=bytes(sum((1 if pixel[x+j] else 0)<<(7-j)
+                          for j in range(8)) for x in range(0,w,8))
+                  rows.append(pad(row))
+                  masks.append(pad(bytes(mask)))
+              palette=ega if depth==4 else [(0,0,0),(255,255,255)]
+              pal=b''.join(bytes((b,g,r,0)) for r,g,b in palette)
+              bits=b''.join(rows); alpha=b''.join(masks)
+              dib=struct.pack("<IiiHHIIiiII",40,w,w*2,1,depth,0,len(bits)+len(alpha),0,0,len(palette),0)
+              return dib+pal+bits+alpha
+          frames=[(32,4),(64,1),(16,4)]
+          image_data=[icon_image(w,d) for w,d in frames]
+          header=struct.pack("<HHH",0,1,len(frames))
+          offset=6+16*len(frames)
+          for (w,depth),payload in zip(frames,image_data):
+              header+=struct.pack("<BBBBHHII",w,w,(1<<depth),0,1,depth,len(payload),offset)
+              offset+=len(payload)
+          Path("win104-viewer/CHRONO.ICO").write_bytes(header+b''.join(image_data))
+          print("Vintage 4/1-bpp multi-image ICO:",offset,"bytes")
           PY
 
       - name: Compile for Windows 1.04 with true windows1 runtime
