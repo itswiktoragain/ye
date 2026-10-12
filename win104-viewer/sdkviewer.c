@@ -1,5 +1,6 @@
 /* ChronoView SAFE - Windows 1.04, 8086 real-mode, API as in Win1 SDK.
  *
+ * Open Watcom __loadds reloads DGROUP after reentry from USER.EXE.
  * The original modern-style implementation crashed Windows 1.04 during
  * window movement. This rewrite avoids __loadds, custom child controls,
  * extra window classes, DOS file I/O during startup, and discardable code.
@@ -42,7 +43,7 @@ static char open_path[PATH_CAP];
 static RECT paint_rect;
 /* No new C library calls that take pointers into SS: use data statics. */
 
-long FAR PASCAL View104Proc(HWND h,unsigned msg,WORD wp,LONG lp);
+long FAR PASCAL __loadds View104Proc(HWND h,unsigned msg,WORD wp,LONG lp);
 
 static void set_status(const char *message) {
     unsigned i=0;
@@ -210,7 +211,7 @@ static BOOL register_class(HINSTANCE inst) {
     LocalFree((HLOCAL)wc);
     return result;
 }
-long FAR PASCAL View104Proc(HWND h,unsigned msg,WORD wp,LONG lp) {
+long FAR PASCAL __loadds View104Proc(HWND h,unsigned msg,WORD wp,LONG lp) {
     PAINTSTRUCT ps;
     (void)lp;
     switch(msg) {
