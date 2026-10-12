@@ -298,12 +298,12 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR cmd,int show) {
     about_button=CreateWindow("BUTTON","About",
          WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,
          320,5,52,21,window,(HMENU)ID_ABOUT,inst,(LPSTR)0);
-        "STEP 06 controls created" : "STEP 06 some controls unavailable",0);
+    /* If a child creation fails, the image can still be opened through
+     * the Win1 keyboard shortcut once the event loop starts. */
 
     /* Never pass Win3.x nCmdShow values. Windows 1.x uses OPENWINDOW=1. */
     ShowWindow(window,1);
-    /* UpdateWindow() can cause a synchronous WM_PAINT with a premature DS
-     * in old 16-bit Windows. Let GetMessage drive the first repaint. */
+    /* Let the normal event loop drive painting. */
     InvalidateRect(window,(LPRECT)0,TRUE);
     if(cmd && *cmd) {
         unsigned j=0;
