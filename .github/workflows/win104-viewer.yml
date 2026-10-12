@@ -31,6 +31,30 @@ jobs:
           7z x -y -o"$HOME/watcom" /tmp/ow-linux-x64 >/dev/null
           chmod -R u+rx "$HOME/watcom/binl64" "$HOME/watcom/binl"
 
+      - name: Generate Windows 1.04-compatible monochrome icon
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+          def row(y):
+              v=0
+              for x in range(32):
+                  frame=(x<2 or x>29 or y<2 or y>29)
+                  fill=(x>7 and x<24 and y>7 and y<24 and ((x+y)//3)%2==0)
+                  if frame or fill: v |= 1 << (31-x)
+              return struct.pack(">I",v)
+          bits=b"".join(row(y) for y in reversed(range(32)))
+          # One-bit icon, standard 32x32 XOR and AND bitmasks.
+          mask=b"\x00"*(32*4)
+          hdr=struct.pack("<IiiHHIIiiII",40,32,64,1,1,0,len(bits)+len(mask),0,0,0,0)
+          pal=b"\x00\x00\x00\x00\xff\xff\xff\x00"
+          dib=hdr+pal+bits+mask
+          ico=struct.pack("<HHH",0,1,1)+struct.pack("<BBBBHHII",32,32,2,0,1,1,len(dib),22)+dib
+          Path("win104-viewer/CHRONO.ICO").write_bytes(ico)
+          print("Monochrome Windows 1.x icon bytes:",len(ico))
+          PY
+
       - name: Compile for Windows 1.04 with true windows1 runtime
         shell: bash
         run: |
@@ -41,7 +65,9 @@ jobs:
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
           # 8086, small model, separate DS/SS, never assume SS==DS:
-          wcc -bt=windows -ms -0 -zu -zw -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=viewer.obj viewer.c
+          wrc -q -r -10 -bt=windows -fo=CHRONO.RES CHRONO.RC
+          wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=viewer.obj viewer.c
+          wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=probe.obj probe.c
           cat > viewer.lnk <<'LINK'
           system windows1
           name CHRONO.EXE
@@ -52,16 +78,31 @@ jobs:
           option stack=8192
           option heapsize=4096
           option map=CHRONO.MAP
+          option resource=CHRONO.RES
           LINK
           wlink @viewer.lnk
-          file CHRONO.EXE
-          ls -l CHRONO.EXE CHRONO.MAP
+          cat > probe.lnk <<'LINK'
+          system windows1
+          name PROBE.EXE
+          file probe.obj
+          EXPORT ProbeProc.1 PRIVATE RESIDENT
+          segment TYPE CODE PRELOAD MOVEABLE DISCARDABLE SHARED
+          segment TYPE DATA PRELOAD MOVEABLE
+          option stack=4096
+          option heapsize=2048
+          option map=PROBE.MAP
+          option resource=CHRONO.RES
+          LINK
+          wlink @probe.lnk
+          file CHRONO.EXE PROBE.EXE
+          ls -l CHRONO.EXE PROBE.EXE CHRONO.MAP PROBE.MAP
 
       - name: Verify NE imports, target and real-mode compatibility
         shell: bash
         run: |
           set -euo pipefail
           python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
+          python3 win104-viewer/verify_ne.py win104-viewer/PROBE.EXE
 
       - name: Package EXE with test image
         shell: bash
@@ -76,27 +117,33 @@ jobs:
           PY
           cd win104-viewer
           cat > INSTALL.TXT <<'TXT'
-          ChronoView for Windows 1.04 - experimental real-mode build
+          ChronoView startup repair for Windows 1.04 (8086)
 
-          1. Copy CHRONO.EXE and IMAGE.CV1 into C:\ in the emulator.
-          2. Start Windows 1.04 and launch CHRONO.EXE through MS-DOS
-             Executive (or your emulator's normal Windows app launcher).
-          3. Enter C:\IMAGE.CV1 in the file path box and click Open.
-          4. For modern PNG/JPEG/WebP photos, use convert.html on your
-             phone or current PC to save a CV1 image, then transfer it
-             into the emulated DOS drive.
+          1. Copy PROBE.EXE, CHRONO.EXE, and IMAGE.CV1 into the
+             emulated Windows 1.04 DOS drive (e.g., C:\\).
+          2. Run PROBE.EXE first. It must show a simple tiled
+             "ChronoView Win1 Probe" window with a short text line.
+             If PROBE.EXE crashes, the issue is in the 16-bit loader,
+             runtime, Windows installation, or emulator.
+          3. Run CHRONO.EXE.
+             The image viewer has a path box and an Open button.
+          4. Enter C:\\IMAGE.CV1 and click Open.
+          5. If Windows hangs, check CHRONO.LOG next to where
+             CHRONO.EXE was started. The last STEP/ERROR identifies
+             which startup call was reached. Include the log if reporting.
+          6. Convert PNG/JPEG/WebP with convert.html on your
+             phone and transfer the resulting CV1 file.
 
-          The application uses only the 16-color CV1 format directly.
-          It does not decode PNG/JPEG/WebP in the 1985 operating system.
-          Building is verified; actual Windows 1.04 boot is not emulator-tested.
+          Build verified by GitHub Actions, not boot-tested on Windows 1.04.
           TXT
 
       - name: Upload runnable files
         uses: actions/upload-artifact@v4
         with:
-          name: CHRONOVIEW-WIN104-8086
+          name: CHRONOVIEW-WIN104-STARTUP-REPAIR
           path: |
             win104-viewer/CHRONO.EXE
+            win104-viewer/PROBE.EXE
             win104-viewer/IMAGE.CV1
             win104-viewer/INSTALL.TXT
             win104-viewer/convert.html
