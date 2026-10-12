@@ -46,7 +46,15 @@ jobs:
           flags="-bt=windows -ms -0 -zu -zw -bg -s -nt=_TEXT -dWINVER=0x0100 -wx -we -zq"
           wcc $flags -fo=sdkprobe.obj sdkprobe.c
           wrc -q -r -10 -bt=windows -fo=win104picker.res win104picker.rc
+          # PicoJPEG by Rich Geldreich, public domain / MIT, pinned source.
+          curl -fsSL --retry 3 -o picojpeg.c https://raw.githubusercontent.com/richgel999/picojpeg/8ab33a909b4115ace4a952b7ffcb64c350f9298d/picojpeg.c
+          curl -fsSL --retry 3 -o picojpeg.h https://raw.githubusercontent.com/richgel999/picojpeg/8ab33a909b4115ace4a952b7ffcb64c350f9298d/picojpeg.h
           wcc $flags -fo=win104picker.obj win104picker.c
+          wcc $flags -fo=codecs.obj codecs.c
+          wcc $flags -fo=codec_jpeg.obj codec_jpeg.c
+          wcc $flags -fo=codec_png.obj codec_png.c
+          wcc $flags -fo=codec_webp.obj codec_webp.c
+          wcc -bt=windows -ms -0 -zu -zw -bg -s -nt=_TEXT -dWINVER=0x0100 -zq -fo=picojpeg.obj picojpeg.c
           wcc $flags -fo=minwin.obj minwin.c
 
           cat > sdkprobe.lnk <<'LINK'
@@ -66,6 +74,11 @@ jobs:
           system windows1
           name CHRONO.EXE
           file win104picker.obj
+          file codecs.obj
+          file codec_jpeg.obj
+          file codec_png.obj
+          file codec_webp.obj
+          file picojpeg.obj
           EXPORT ChronoWndProc.1 PRIVATE RESIDENT
           EXPORT ChronoOpenDlgProc.2 PRIVATE RESIDENT
           segment TYPE CODE MOVEABLE
