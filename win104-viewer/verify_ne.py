@@ -86,8 +86,14 @@ def verify(path):
         entry=ne+u16(ne+4)
         bundle_size=data[entry]
         bundle_seg=data[entry+1]
-        assert bundle_size>=1 and bundle_seg not in (0,255), "Unexpected Win1 callback export"
-        entry_offset=u16(entry+3)   # exported ordinal 1
+        assert bundle_size>=1 and bundle_seg!=0, "Missing Win1 callback export"
+        if bundle_seg==255:
+            # Windows NE movable-export bundle: flags, INT 3Fh, seg, offset.
+            assert u16(entry+3)==0x3fcd, "Unexpected movable entry thunk"
+            bundle_seg=data[entry+5]
+            entry_offset=u16(entry+6)
+        else:
+            entry_offset=u16(entry+3)
         code_ent=seg_table+8*(bundle_seg-1)
         code_pos=u16(code_ent)<<u16(ne+0x32)
         code_size=u16(code_ent+2)
