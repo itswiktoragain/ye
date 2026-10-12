@@ -1,40 +1,72 @@
-# ChronoView for Windows 1.04 — loader diagnostics
+# ChronoView for Windows 1.04
 
-**Current status:** 8086 real-mode NE executables build and pass static checks in GitHub Actions. They have **not** yet passed a real Windows 1.04 emulator boot test.
+## Current build — 8086 kernel-file-I/O rewrite
 
-Following reports of a blank OK dialog and a frozen MS-DOS Executive with the hourglass cursor, the viewer was rebuilt to:
+The earlier `CHRONO.EXE` builds caused severe Windows 1.04 guest instability:
+blank dialogs, damaged text, a hung MS-DOS Executive, and apparent DOS
+file-system failures until cold reboot. **Do not continue using those EXEs.**
 
-- remove all `fopen("CHRONO.LOG")` and other DOS file I/O **during startup**
-- use a `FAR PASCAL __loadds` callback so the correct Win16 data segment is restored
-- use a built-in icon instead of an app resource, avoiding a legacy icon loader dependency
-- avoid Windows 2.x/3.x APIs and use the genuine Watcom `system windows1` target
-- avoid initial modal error dialogs and unnecessary synchronous painting
-- include minimal test programs to distinguish OS loader errors from GUI errors
+The current CHRONO.EXE has been rewritten in `win104safe.c`, **not**
+`viewer.c` or `sdkviewer.c`. The old files are kept for reference,
+not included in the current CHRONO link.
 
-## Test order (important)
+### What changed
 
-Restart the emulator **after** a freeze, and make a VM snapshot first.
+- Removed `stdio.h`, `fopen`, `fread`, `fgetc`, `_dos_open` and the
+  large DOS-oriented C file I/O implementation from the viewer.
+- Uses Windows **1.x KERNEL._lopen, KERNEL._lread, KERNEL._lclose**
+  to load CV1 image bytes (checked as ordinal imports 85, 82, 81).
+- Never opens or writes a file during startup or routine repaint.
+- Restores the app data segment with `FAR PASCAL __loadds`, exports the
+  callback, and validates the resulting NE relocation in CI.
+- Disables the Watcom stack-checker call that previously preceded
+  the callback's DS restoration.
+- Uses a single tiled window, with no child controls, resources, dialogs
+  or dynamic GDI allocations during painting.
+- Rejects second instances to avoid copying state from a hung process.
+- Caps images at **16,384 16-colour EGA pixels** to reduce 16-bit pressure.
+- Includes a host-side PNG/JPEG/WebP-to-CV1 converter.
 
-1. **MINWIN.EXE** — loads the same Win1 C runtime and exits immediately. It displays **no window**. MS-DOS Executive should become responsive straight away. If it hangs, the problem is at the Windows loader / CRT level, *not* image decoding or buttons.
-2. **PROBE.EXE** — minimal Win1 tiled window with one line of text, no file I/O or custom resources. If MINWIN works and PROBE hangs, the problem is with window registration / GDI / callback conventions.
-3. **CHRONO.EXE** — the image viewer. Once it opens, enter `C:\\IMAGE.CV1` and select **Open**.
+The Open Watcom Windows1 startup routine still contains its normal DOS
+version check and process-exit instructions. The code does **not** perform
+raw DOS file operations when opening images.
 
-If an executable freezes, **stop there**. Report the *first* program that failed and which emulator (DOSBox-X, PCem, 86Box, etc.) was used. Repeatedly launching a frozen EXE will not help.
+### Testing
 
-`CHRONO.LOG` is **no longer created**: its synchronous DOS file accesses were part of the unsafe startup path.
+**This is statically verified, not Windows 1.04 emulator-verified.**
+Compiled with Open Watcom's genuine `system windows1` linker target,
+8086 CPU, non-discardable movable code, and no compiler warnings. CI
+checks the Windows 1.00 NE header, Win1 imports, DGROUP callback relocation,
+and absence of the unwanted DOS-oriented file I/O handlers in the map.
 
-The ZIP includes all three EXEs, `IMAGE.CV1`, an offline `convert.html`, and `INSTALL.TXT`.
+Always make a disposable VM snapshot before testing. Power off the virtual
+machine fully after a crash; do not restore its corrupted saved RAM.
 
-## Image-format limitations
+Copy `CHRONO.EXE` and `IMAGE.CV1` to an emulated DOS drive. Launch
+`CHRONO.EXE`, then first verify it can remain open and be moved around
+safely. Press **O** to open `C:\\IMAGE.CV1`. **P** edits the file path,
+**F** toggles fit, **Q** exits. If you need a modern photo, open
+`convert.html` on your phone and convert to CV1 before transferring it.
 
-The viewer still directly loads **CV1** (60,000 pixels maximum, indexed 16-colour EGA). PNG, JPEG and WebP are converted using the included modern browser tool. There is **no native PNG/JPEG/WebP decoding inside the Windows 1.04 executable** yet.
+If it freezes without any image being opened, **do not repeatedly launch**
+it. This would point to the Windows 1.x ABI/loader/message-loop path,
+not the CV1 decoder, and needs a targeted emulator test.
 
-## Source
+### Limitations
 
-- `minwin.c` — no-GUI Win1 real-mode startup test
-- `probe.c` — pure Win1 window creation, GDI and message-loop test
-- `viewer.c` — CV1 image viewer
-- `verify_ne.py` — NE header and API import check
-- `convert.html` — modern browser image format conversion
+The Windows 1.04 executable itself does **not** decode PNG/JPEG/WebP.
+It accepts the companion 16-colour CV1 format. The browser converter
+supports modern image formats and constrains them to the viewer's
+16,384-pixel limit.
 
-Built using [Open Watcom 2](https://github.com/open-watcom/open-watcom-v2) and Win1 examples from [doslib](https://github.com/joncampbell123/doslib/tree/master/windows/hello). Compatibility analysis is not a substitute for a Windows 1.04 emulator run.
+### Build sources
+
+- `win104safe.c` — **current native Win1 viewer source**
+- `verify_ne.py` — static Windows 1.x binary validator
+- `convert.html` — offline converter for modern PNG/JPEG/WebP
+- `.github/workflows/win104-viewer.yml` — GitHub Actions build
+- `viewer.c`, `sdkviewer.c`, `inflate.c` — obsolete/experimental source,
+  not linked into current CHRONO.EXE
+
+Original API references: [Microsoft's Windows 1.01 SDK sample](https://github.com/joncampbell123/doslib/tree/master/mssample/win1.01/C)
+and [Open Watcom's Windows 1.x target](https://github.com/open-watcom/open-watcom-v2).
