@@ -284,13 +284,13 @@ static unsigned ph_sample(unsigned col,unsigned channel) {
                 (ph_depth/8));
     return ph_curr[bytepos]; /* high byte for 16bpc PNG */
 }
-static unsigned ph_alpha(unsigned color,unsigned r,unsigned g,unsigned b) {
+static unsigned ph_alpha(unsigned srcx,unsigned index,unsigned r,unsigned g,unsigned b) {
     if(ph_type==3) {
-        if(color<ph_palette_count)return ph_palette[color][3];
+        if(index<ph_palette_count)return ph_palette[index][3];
         return 255;
     }
-    if(ph_type==4)return ph_sample(color,1);
-    if(ph_type==6)return ph_sample(color,3);
+    if(ph_type==4)return ph_sample(srcx,1);
+    if(ph_type==6)return ph_sample(srcx,3);
     if(ph_gray_transparent && ph_type==0 &&
        r==ph_trns_gray)return 0;
     if(ph_rgb_transparent && ph_type==2 &&
@@ -337,7 +337,7 @@ static void ph_sample_row(unsigned row,unsigned *target_y) {
                 break;
               default: r=g=b=0;
             }
-            a=ph_alpha(srcx,r,g,b);
+            a=ph_alpha(srcx,color,r,g,b);
             cv_codec_put(x,*target_y,ph_white(r,a),ph_white(g,a),ph_white(b,a));
         }
         (*target_y)++;
@@ -442,8 +442,9 @@ static int ph_init_png(void) {
         if(byte<0 || byte!=sig[i])return 0;
     }
     if(!ph_chunk(&length,name) || !ph_is(name,"IHDR") || length!=13)return 0;
-    ph_width=(unsigned)ph_be32();
-    ph_height=(unsigned)ph_be32();
+    { unsigned long w=ph_be32(),h=ph_be32();
+      if(w>8192UL || h>8192UL)return 0;
+      ph_width=(unsigned)w;ph_height=(unsigned)h; }
     if(ph_bad || !ph_width || !ph_height || ph_width>8192 || ph_height>8192)
         return 0;
     ph_depth=(unsigned)ph_filebyte();
