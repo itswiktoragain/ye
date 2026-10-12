@@ -133,10 +133,11 @@ jobs:
           7. Host-side convert.html converts PNG/JPEG/WebP to 16-colour
              CV1, at 16384 pixels maximum, for this build.
 
-          File handling now uses native Windows 1.x KERNEL._lopen,
-          _lread and _lclose. No fopen, fread, fgetc, _dos_open,
-          DOS interrupt, custom window icon, modal startup dialog,
-          or second-instance data copy is used by the viewer.
+          Image file handling uses native Windows 1.x KERNEL._lopen,
+          _lread and _lclose, not fopen/fread/fgetc/_dos_open.
+          The Watcom Windows1 startup still contains normal DOS
+          version-check and task-exit instructions. No custom window
+          icon, modal startup dialog or instance-memory copy is used.
 
           The code is compiled for 8086 Windows1 with a resident
           __loadds callback; binary relocation and import-table checks
