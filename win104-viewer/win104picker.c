@@ -11,6 +11,7 @@
  * allocations, custom menus or child windows.
  */
 #include <windows.h>
+#include "codecs.h"
 #include "win104picker.h"
 
 #define CV_MAX_PIXELS 16384UL
@@ -24,12 +25,14 @@ static char cv_title[22] = "ChronoView";
 static char cv_path[CV_PATH_CAP] = "C:\\IMAGE.CV1";
 static char cv_error_empty[] = "Type a path first.";
 static char cv_error_file[] = "File not found / inaccessible.";
-static char cv_error_format[] = "Not a CV1 file - convert PNG/JPEG/WebP.";
+static char cv_error_format[] = "Unknown image format.";
 static char cv_error_size[] = "Max 16,384 pixels. Reconvert smaller.";
 static char cv_error_memory[] = "Not enough free Windows memory.";
 static char cv_error_data[] = "Invalid or truncated CV1 pixel data.";
 static char cv_info_ready[] = "";
 static char cv_info_loaded[] = "";
+static char cv_error_codec[]="Image decode failed or unsupported mode.";
+static char cv_error_webp[]="WebP decoding is not available yet.";
 static char cv_info_brush[] = "Low graphics memory; image may be blank.";
 
 static char *cv_status = cv_info_ready;
@@ -44,7 +47,7 @@ static FARPROC cv_picker_proc=(FARPROC)0;
 static char cv_open_label[]="&Open...";
 static char cv_clear_label[]="&Clear";
 static char cv_fit_label[]="&Fit image";
-static char cv_default_mask[]="*.CV1";
+static char cv_default_mask[]="*.*";
 static char cv_empty[]="";
 static char cv_error_picker[]="File selection is unavailable.";
 static char cv_picker_spec[CV_PATH_CAP];
@@ -52,7 +55,7 @@ static char cv_picker_selected[CV_PATH_CAP];
 static char cv_picker_name[CV_PATH_CAP];
 
 /* Buffers in DGROUP, not on Windows' separate SS stack segment. */
-static unsigned char cv_header[8];
+static unsigned char cv_header[12];
 static RECT cv_client;
 static const unsigned char cv_ega[16][3] = {
   {0,0,0},      {0,0,170},    {0,170,0},   {0,170,170},
@@ -90,6 +93,26 @@ static void cv_close_image(void) {
         }
     }
 }
+static void cv_activate_image(HGLOBAL handle,
+                              unsigned char __far *pixels,
+                              unsigned w,unsigned h) {
+    unsigned i;
+    /* The old image is left untouched until the new image has decoded. */
+    cv_close_image();
+    cv_image_handle=handle;
+    cv_pixels=pixels;
+    cv_width=w;
+    cv_height=h;
+    for(i=0;i<CV_COLOR_COUNT;i++) {
+        cv_brushes[i]=CreateSolidBrush(RGB(
+           cv_ega[i][0],cv_ega[i][1],cv_ega[i][2]));
+        if(!cv_brushes[i]) {
+            cv_status_message(cv_info_brush);
+            return;
+        }
+    }
+    cv_status_message(cv_info_loaded);
+}
 static void cv_open_image(void) {
     HFILE file;
     unsigned w,h;
@@ -97,21 +120,47 @@ static void cv_open_image(void) {
     unsigned result;
     HGLOBAL next_handle;
     unsigned char __far *next_pixels;
-
+    int codec=0;
     if(!cv_path[0]) {
         cv_status_message(cv_error_empty);
         return;
     }
-    /* Windows 1.x KERNEL file APIs, NOT Watcom fopen/fread/fgetc,
-       NOT DOS INT 21h from a USER.EXE callback. */
     file=_lopen((LPCSTR)cv_path,OF_READ);
     if(file==(HFILE)-1) {
         cv_status_message(cv_error_file);
         return;
     }
-    result=_lread(file,(void __huge *)cv_header,8);
-    if(result!=8 || cv_header[0]!='C' || cv_header[1]!='V'
-        || cv_header[2]!='1' || cv_header[3]!=26) {
+    result=_lread(file,(void __huge *)cv_header,12);
+    if(result>=8 && cv_header[0]==137 && cv_header[1]=='P' &&
+       cv_header[2]=='N' && cv_header[3]=='G')codec=1;
+    else if(result>=3 && cv_header[0]==255 &&
+            cv_header[1]==216 && cv_header[2]==255)codec=2;
+    else if(result>=12 && cv_header[0]=='R' && cv_header[1]=='I' &&
+            cv_header[2]=='F' && cv_header[3]=='F' &&
+            cv_header[8]=='W' && cv_header[9]=='E' &&
+            cv_header[10]=='B' && cv_header[11]=='P')codec=3;
+    if(codec) {
+        int ok=0;
+        if(codec==1)ok=cv_decode_png(file);
+        if(codec==2)ok=cv_decode_jpeg(file);
+        if(codec==3)ok=cv_decode_webp(file);
+        _lclose(file);
+        if(ok && cv_codec_pixels) {
+            HGLOBAL handle=cv_codec_handle;
+            unsigned char __far *pixels=cv_codec_pixels;
+            unsigned nw=cv_codec_width,nh=cv_codec_height;
+            cv_codec_handle=(HGLOBAL)0;
+            cv_codec_pixels=(unsigned char __far *)0;
+            cv_codec_width=cv_codec_height=0;
+            cv_activate_image(handle,pixels,nw,nh);
+        } else {
+            cv_codec_release();
+            cv_status_message(codec==3?cv_error_webp:cv_error_codec);
+        }
+        return;
+    }
+    if(result<8 || cv_header[0]!='C' || cv_header[1]!='V'
+       || cv_header[2]!='1' || cv_header[3]!=26) {
         _lclose(file);
         cv_status_message(cv_error_format);
         return;
@@ -137,6 +186,12 @@ static void cv_open_image(void) {
         cv_status_message(cv_error_memory);
         return;
     }
+    /* Read the original CV1 payload starting immediately after its
+       8-byte header, not the whole 12-byte magic lookahead. */
+    if(_llseek(file,8L,0)!=8L) {
+        GlobalUnlock(next_handle);GlobalFree(next_handle);
+        _lclose(file);cv_status_message(cv_error_data);return;
+    }
     result=_lread(file,(void __huge *)next_pixels,(UINT)need);
     _lclose(file);
     if(result!=(UINT)need) {
@@ -153,22 +208,7 @@ static void cv_open_image(void) {
             return;
         }
     }
-
-    /* Only replace the old picture after the new one passes validation. */
-    cv_close_image();
-    cv_image_handle=next_handle;
-    cv_pixels=next_pixels;
-    cv_width=w;
-    cv_height=h;
-    for(j=0;j<CV_COLOR_COUNT;j++) {
-        cv_brushes[(unsigned)j]=CreateSolidBrush(RGB(
-            cv_ega[(unsigned)j][0],cv_ega[(unsigned)j][1],cv_ega[(unsigned)j][2]));
-        if(!cv_brushes[(unsigned)j]) {
-            cv_status_message(cv_info_brush);
-            return;
-        }
-    }
-    cv_status_message(cv_info_loaded);
+    cv_activate_image(next_handle,next_pixels,w,h);
 }
 static void cv_draw_image(HDC dc,RECT __far *client) {
     unsigned view_w,view_h,draw_w,draw_h;
