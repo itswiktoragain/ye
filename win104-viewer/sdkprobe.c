@@ -1,5 +1,7 @@
 /* ChronoView SDK probe. Built for 8086 Windows 1.0 using the real
  * Open Watcom windows1 startup and the 1985 Win1.01 SDK conventions.
+ * Open Watcom additionally needs __loadds: FAR PASCAL alone reuses USER's DS
+ * during callbacks, which can trash the application's strings and memory.
  * This contains no image codec, file I/O, custom menu, or child window.
  */
 #include <windows.h>
@@ -10,7 +12,7 @@ static char probe_class[16]="CVSDK104";
 static char probe_title[26]="ChronoView SDK Test";
 static char probe_text[44]="Window and text are working";
 
-long FAR PASCAL SdkProbeProc(HWND h, unsigned message, WORD wp, LONG lp);
+long FAR PASCAL __loadds SdkProbeProc(HWND h, unsigned message, WORD wp, LONG lp);
 
 static BOOL PASCAL SetupProbe(HINSTANCE inst) {
     WNDCLASS *wc;
@@ -55,7 +57,7 @@ int PASCAL WinMain(HINSTANCE inst,HINSTANCE prev,LPSTR args,int show) {
     }
     return (int)msg.wParam;
 }
-long FAR PASCAL SdkProbeProc(HWND h,unsigned message,WORD wp,LONG lp) {
+long FAR PASCAL __loadds SdkProbeProc(HWND h,unsigned message,WORD wp,LONG lp) {
     PAINTSTRUCT ps;
     switch(message) {
       case WM_CREATE:
