@@ -54,12 +54,6 @@ int cv_codec_begin(unsigned w,unsigned h) {
     cv_codec_height=outh;
     return 1;
 }
-static unsigned rgb_score(int a,int b,int c,unsigned idx) {
-    long dr=(long)a-ega[idx][0];
-    long dg=(long)b-ega[idx][1];
-    long db=(long)c-ega[idx][2];
-    return 0; /* unused: avoid overflowing 16-bit unsigned scores */
-}
 void cv_codec_put(unsigned x,unsigned y,unsigned r,unsigned g,unsigned b) {
     unsigned i,best=0;
     unsigned long best_dist=0xffffffffUL;
