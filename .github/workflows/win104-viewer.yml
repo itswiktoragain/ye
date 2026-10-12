@@ -1,4 +1,4 @@
-name: Windows 1.04 Native Viewer
+name: Windows 1.04 SDK Compatibility Build
 
 on:
   push:
@@ -13,79 +13,25 @@ permissions:
   contents: read
 
 jobs:
-  win104:
-    name: Build Windows 1.0 / 8086 NE executable
+  native-win1:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install Open Watcom 2 and ZIP tools
+
+      - name: Install native 8086 Windows 1.x compiler
         shell: bash
         run: |
           set -euo pipefail
-          curl -fL --retry 3 -o /tmp/ow-linux-x64 \
+          curl -fL --retry 3 -o /tmp/ow-linux \
             https://github.com/open-watcom/open-watcom-v2/releases/download/Current-build/open-watcom-2_0-c-linux-x64
           mkdir -p "$HOME/watcom"
           sudo apt-get update -qq
           sudo apt-get install -y -qq p7zip-full
-          7z x -y -o"$HOME/watcom" /tmp/ow-linux-x64 >/dev/null
+          7z x -y -o"$HOME/watcom" /tmp/ow-linux >/dev/null
           chmod -R u+rx "$HOME/watcom/binl64" "$HOME/watcom/binl"
 
-      - name: Create compiler-compatible vintage icon container
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import struct
-          from pathlib import Path
-
-          # WRC's -10 option converts modern ICO containers to Windows 1.0
-          # NE resources. Feed it 4bpp and 1bpp historical-compatible sizes.
-          ega=[(0,0,0),(0,0,170),(0,170,0),(170,0,0),
-               (170,0,170),(170,85,0),(170,170,170),(255,255,255),
-               (85,85,85),(85,85,255),(85,255,85),(85,255,255),
-               (255,85,85),(255,85,255),(255,255,85),(255,255,255)]
-          def icon_image(w,depth):
-              rows=[]
-              masks=[]
-              pad=lambda b: b + bytes((-len(b))%4)
-              for y in reversed(range(w)):
-                  pixel=[]
-                  mask=bytearray((w+7)//8)
-                  for x in range(w):
-                      xx=x*64//w; yy=y*64//w
-                      body=(12<=xx<=52 and 23<=yy<=49)
-                      top=(19<=xx<=30 and 16<=yy<=23)
-                      inside=body or top
-                      d=(xx-32)**2+(yy-36)**2
-                      lens=d<90
-                      border=xx in (12,52) or yy in (23,49)
-                      if not inside: mask[x//8] |= 1 << (7-x%8)
-                      shade=0 if border else (15 if lens else (12 if inside else 0))
-                      pixel.append(shade)
-                  if depth==4:
-                      row=bytes((pixel[x]<<4)|pixel[x+1] for x in range(0,w,2))
-                  else:
-                      row=bytes(sum((1 if pixel[x+j] else 0)<<(7-j)
-                          for j in range(8)) for x in range(0,w,8))
-                  rows.append(pad(row))
-                  masks.append(pad(bytes(mask)))
-              palette=ega if depth==4 else [(0,0,0),(255,255,255)]
-              pal=b''.join(bytes((b,g,r,0)) for r,g,b in palette)
-              bits=b''.join(rows); alpha=b''.join(masks)
-              dib=struct.pack("<IiiHHIIiiII",40,w,w*2,1,depth,0,len(bits)+len(alpha),0,0,len(palette),0)
-              return dib+pal+bits+alpha
-          frames=[(32,4),(64,1),(16,4)]
-          image_data=[icon_image(w,d) for w,d in frames]
-          header=struct.pack("<HHH",0,1,len(frames))
-          offset=6+16*len(frames)
-          for (w,depth),payload in zip(frames,image_data):
-              header+=struct.pack("<BBBBHHII",w,w,(1<<depth),0,1,depth,len(payload),offset)
-              offset+=len(payload)
-          Path("win104-viewer/CHRONO.ICO").write_bytes(header+b''.join(image_data))
-          print("Vintage 4/1-bpp multi-image ICO:",offset,"bytes")
-          PY
-
-      - name: Compile for Windows 1.04 with true windows1 runtime
+      - name: Compile Windows 1.01-SDK-style applications
         shell: bash
         run: |
           set -euxo pipefail
@@ -94,106 +40,107 @@ jobs:
           export INCLUDE="$WATCOM/h;$WATCOM/h/win"
           export PATH="$WATCOM/binl64:$WATCOM/binl:$PATH"
           cd win104-viewer
-          # 8086, small model, separate DS/SS, never assume SS==DS:
-          # For boot isolation, temporarily exclude custom resources entirely.
-          wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=viewer.obj viewer.c
-          wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=probe.obj probe.c
-          wcc -bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq -fo=minwin.obj minwin.c
-          cat > viewer.lnk <<'LINK'
+          # Watcom real mode: 8086, 16-bit, Windows 1.0, independent SS/DS.
+          flags="-bt=windows -ms -0 -zu -zw -bg -nt=_TEXT -dWINVER=0x0100 -wx -zq"
+          wcc $flags -fo=sdkprobe.obj sdkprobe.c
+          wcc $flags -fo=sdkviewer.obj sdkviewer.c
+          wcc $flags -fo=minwin.obj minwin.c
+
+          cat > sdkprobe.lnk <<'LINK'
+          system windows1
+          name SDKPROBE.EXE
+          file sdkprobe.obj
+          EXPORT SdkProbeProc.1 PRIVATE RESIDENT
+          segment TYPE CODE MOVEABLE
+          segment TYPE DATA MOVEABLE
+          option stack=4096
+          option heapsize=1024
+          option map=SDKPROBE.MAP
+          LINK
+          wlink @sdkprobe.lnk
+
+          cat > sdkviewer.lnk <<'LINK'
           system windows1
           name CHRONO.EXE
-          file viewer.obj
-          EXPORT ViewWndProc.1 PRIVATE RESIDENT
-          segment TYPE CODE PRELOAD MOVEABLE DISCARDABLE SHARED
-          segment TYPE DATA PRELOAD MOVEABLE
-          option stack=8192
-          option heapsize=4096
-          option map=CHRONO.MAP
-          LINK
-          wlink @viewer.lnk
-          cat > probe.lnk <<'LINK'
-          system windows1
-          name PROBE.EXE
-          file probe.obj
-          EXPORT ProbeProc.1 PRIVATE RESIDENT
-          segment TYPE CODE PRELOAD MOVEABLE DISCARDABLE SHARED
-          segment TYPE DATA PRELOAD MOVEABLE
+          file sdkviewer.obj
+          EXPORT View104Proc.1 PRIVATE RESIDENT
+          segment TYPE CODE MOVEABLE
+          segment TYPE DATA MOVEABLE
           option stack=4096
           option heapsize=2048
-          option map=PROBE.MAP
+          option map=CHRONO.MAP
           LINK
-          wlink @probe.lnk
+          wlink @sdkviewer.lnk
+
           cat > minwin.lnk <<'LINK'
           system windows1
           name MINWIN.EXE
           file minwin.obj
-          segment TYPE CODE PRELOAD MOVEABLE DISCARDABLE SHARED
-          segment TYPE DATA PRELOAD MOVEABLE
+          segment TYPE CODE MOVEABLE
+          segment TYPE DATA MOVEABLE
           option stack=4096
           option heapsize=1024
           option map=MINWIN.MAP
           LINK
           wlink @minwin.lnk
-          file CHRONO.EXE PROBE.EXE MINWIN.EXE
-          ls -l CHRONO.EXE PROBE.EXE MINWIN.EXE CHRONO.MAP PROBE.MAP MINWIN.MAP
 
-      - name: Verify NE imports, target and real-mode compatibility
-        shell: bash
+          file SDKPROBE.EXE CHRONO.EXE MINWIN.EXE
+          ls -lh SDKPROBE.EXE CHRONO.EXE MINWIN.EXE
+
+      - name: Verify Win1 module imports and NE formats
         run: |
           set -euo pipefail
+          python3 win104-viewer/verify_ne.py win104-viewer/SDKPROBE.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/CHRONO.EXE
-          python3 win104-viewer/verify_ne.py win104-viewer/PROBE.EXE
           python3 win104-viewer/verify_ne.py win104-viewer/MINWIN.EXE
 
-      - name: Package EXE with test image
+      - name: Make small 1985-compatible test picture
         shell: bash
         run: |
-          set -euo pipefail
           python3 - <<'PY'
-          import pathlib
-          p = pathlib.Path('win104-viewer/IMAGE.CV1')
+          from pathlib import Path
           w,h=96,64
-          colors=bytes(((x//8) + (y//8)*2)%16 for y in range(h) for x in range(w))
-          p.write_bytes(b'CV1\x1a' + w.to_bytes(2,'little') + h.to_bytes(2,'little') + colors)
+          data=bytes((x//6+(y//8)*2)%16 for y in range(h) for x in range(w))
+          Path("win104-viewer/IMAGE.CV1").write_bytes(
+              b"CV1\x1a"+w.to_bytes(2,"little")+h.to_bytes(2,"little")+data)
           PY
-          cd win104-viewer
-          cat > INSTALL.TXT <<'TXT'
-          CHRONOVIEW: Windows 1.04 loader-freeze diagnostic build
+          cat > win104-viewer/INSTALL.TXT <<'TXT'
+          ChronoView SDK-safe Windows 1.04 build
 
-          This build makes NO DOS file writes while starting up and includes
-          a progression of three executables to pinpoint the freeze.
+          IMPORTANT: Make a clean snapshot and restart the guest from a
+          cold power-off. Do not resume a RAM snapshot containing the crash.
 
-          1. Restart your Windows 1.04 emulator after the previous freeze.
-          2. Copy MINWIN.EXE, PROBE.EXE, CHRONO.EXE, and IMAGE.CV1
-             to a writable C:\ DOS directory visible to Windows 1.04.
-          3. Run MINWIN.EXE from MS-DOS Executive.
-             It should return IMMEDIATELY to MS-DOS Executive, no window.
-             If this hangs, STOP. Loader/CRT compatibility failed before
-             any GUI or image viewer functions. Tell us "MINWIN freezes".
-          4. If MINWIN succeeds, launch PROBE.EXE.
-             A tiled blank/white window with the text
-             "Windows 1.04 callback and text output OK" should appear.
-             If it hangs, STOP. Tell us "MINWIN works, PROBE freezes".
-          5. If both work, launch CHRONO.EXE.
-             Enter C:\IMAGE.CV1 in its path field and click Open.
-             If CHRONO freezes, reply "PROBE works, CHRONO freezes".
-          6. PNG/JPEG/WebP can be converted to CV1 on your phone
-             using the included convert.html (no network required).
+          1. Run MINWIN.EXE. It should exit instantly with no window.
+          2. Run SDKPROBE.EXE. Move its window around several times.
+             It should remain open with the title "ChronoView SDK Test"
+             and text "Window and text are working".
+          3. Only if step 2 works, run CHRONO.EXE.
+             O: open C:\IMAGE.CV1
+             P: edit image path, Enter to open, Esc to cancel
+             F: fit vs. actual size
+             Q: exit
+          4. PNG, JPEG and WebP must be converted to indexed CV1
+             using convert.html in your modern phone/browser first.
 
-          This artifact was compiled for the real Windows1/8086 linker
-          and statically checked. No Windows 1.04 emulator was available
-          during its construction; runtime success is not yet verified.
+          Both GUI programs now use the 1985 Windows 1.01 SDK conventions:
+          FAR PASCAL callback, zeroed LocalAlloc WNDCLASS,
+          GetInstanceData for multiple running copies, no custom icon,
+          no child windows, no startup disk writes, and no discardable code.
+
+          GitHub verifies the linker and executable structure but an
+          actual Windows 1.04 emulator boot/move test has not been done.
           TXT
 
-      - name: Upload runnable files
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: CHRONOVIEW-WIN104-LOADER-DIAGNOSTICS
+          name: CHRONOVIEW-104-SDK-SAFE
           path: |
-            win104-viewer/CHRONO.EXE
             win104-viewer/MINWIN.EXE
-            win104-viewer/PROBE.EXE
+            win104-viewer/SDKPROBE.EXE
+            win104-viewer/CHRONO.EXE
             win104-viewer/IMAGE.CV1
             win104-viewer/INSTALL.TXT
             win104-viewer/convert.html
+            win104-viewer/SDKPROBE.MAP
+            win104-viewer/CHRONO.MAP
           if-no-files-found: error
