@@ -72,6 +72,14 @@ def verify(path):
     else:
         expected={("KERNEL",91),("USER",41),("USER",57)}
     assert expected<=found, f"Win16 runtime imports unexpectedly missing: {expected-found}"
+    if Path(path).name.upper()=="CHRONO.EXE":
+        needed={("KERNEL",81),("KERNEL",82),("KERNEL",85)}
+        assert needed<=found, (
+            f"Missing Windows 1.0 kernel-native file APIs: {needed-found}"
+        )
+        assert not {("KERNEL",74),("KERNEL",83),("KERNEL",86)} & found, (
+            "Unexpected Windows file operation linked"
+        )
     entry_size=u16(ne+6)
     assert entry_size>0, "No entry table / exported window proc"
 
