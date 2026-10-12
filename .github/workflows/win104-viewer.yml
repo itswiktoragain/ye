@@ -31,28 +31,40 @@ jobs:
           7z x -y -o"$HOME/watcom" /tmp/ow-linux-x64 >/dev/null
           chmod -R u+rx "$HOME/watcom/binl64" "$HOME/watcom/binl"
 
-      - name: Generate Windows 1.04-compatible monochrome icon
+      - name: Generate authentic 1985 Windows 1.x monochrome ICO
         shell: bash
         run: |
           python3 - <<'PY'
-          import struct
           from pathlib import Path
-          def row(y):
-              v=0
-              for x in range(32):
-                  frame=(x<2 or x>29 or y<2 or y>29)
-                  fill=(x>7 and x<24 and y>7 and y<24 and ((x+y)//3)%2==0)
-                  if frame or fill: v |= 1 << (31-x)
-              return struct.pack(">I",v)
-          bits=b"".join(row(y) for y in reversed(range(32)))
-          # One-bit icon, standard 32x32 XOR and AND bitmasks.
-          mask=b"\x00"*(32*4)
-          hdr=struct.pack("<IiiHHIIiiII",40,32,64,1,1,0,len(bits)+len(mask),0,0,0,0)
-          pal=b"\x00\x00\x00\x00\xff\xff\xff\x00"
-          dib=hdr+pal+bits+mask
-          ico=struct.pack("<HHH",0,1,1)+struct.pack("<BBBBHHII",32,32,2,0,1,1,len(dib),22)+dib
-          Path("win104-viewer/CHRONO.ICO").write_bytes(ico)
-          print("Monochrome Windows 1.x icon bytes:",len(ico))
+          # The actual Windows 1.0 SDK used 14-byte icon headers and
+          # 64x64 1-bit XOR+AND masks (1038 bytes), not modern ICO containers.
+          # Header matches the format of the official Windows 1.03 HELLO.ICO.
+          header=bytes.fromhex("0100000000004000400008000000")
+          def pixel(x,y):
+              body=(12<=x<53 and 23<=y<50)
+              top=(19<=x<31 and 16<=y<24)
+              d=(x-32)**2 + (y-36)**2
+              ring=(54<=d<=104)
+              lens=(d<=32)
+              flash=(43<=x<50 and 26<=y<31)
+              return body or top, ring or lens or flash
+          xor=bytearray()
+          andmask=bytearray()
+          for y in range(64):
+              ink=bytearray(8)
+              transparency=bytearray([255]*8)
+              for x in range(64):
+                  opaque,contrast=pixel(x,y)
+                  if opaque:
+                      transparency[x//8] &= ~(1 << (7-(x%8)))
+                      if contrast or x in (12,52) or y in (23,49):
+                          ink[x//8] |= 1 << (7-(x%8))
+              xor.extend(ink)
+              andmask.extend(transparency)
+          icon=header+bytes(xor)+bytes(andmask)
+          assert len(icon)==1038
+          Path("win104-viewer/CHRONO.ICO").write_bytes(icon)
+          print("Authentic Windows 1.x icon:",len(icon),"bytes")
           PY
 
       - name: Compile for Windows 1.04 with true windows1 runtime
