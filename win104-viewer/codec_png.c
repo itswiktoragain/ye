@@ -21,6 +21,8 @@ typedef struct {
 } PNG_HUFF;
 
 static PNG_HUFF ph_lit,ph_dist,ph_code;
+unsigned cv_png_debug_stage=0,cv_png_debug_row=0;
+unsigned long cv_png_debug_output=0;
 static HFILE ph_file;
 static unsigned char ph_filebuf[512];
 static unsigned ph_filepos,ph_filecount;
@@ -368,11 +370,12 @@ static int ph_decode_rows(void) {
     ph_bitbuf=0;ph_bitcount=0;ph_mode=4;ph_bad=0;
     ph_copylen=0;ph_total_out=0;ph_histpos=0;ph_done=0;ph_last=0;
     for(row=0;row<ph_height;row++) {
+        cv_png_debug_row=row;
         filter=ph_inflate();
-        if(filter>4)return 0;
+        if(filter>4){cv_png_debug_stage=10+filter;cv_png_debug_output=ph_total_out;return 0;}
         for(x=0;x<ph_stride;x++) {
             raw=ph_inflate();
-            if(raw>255)return 0;
+            if(raw>255){cv_png_debug_stage=500;cv_png_debug_output=ph_total_out;return 0;}
             a=x>=ph_bpp ? ph_curr[x-ph_bpp]:0;
             b=ph_prev[x];
             c=x>=ph_bpp ? ph_prev[x-ph_bpp]:0;
@@ -525,9 +528,19 @@ int cv_decode_png(HFILE file) {
     ph_filepos=0;ph_filecount=0;
     ph_history_handle=ph_currhandle=ph_prevhandle=(HGLOBAL)0;
     ph_history=ph_curr=ph_prev=(unsigned char __far *)0;
+    cv_png_debug_stage=0;
+    cv_png_debug_row=0;cv_png_debug_output=0;
     if(_llseek(file,0L,0)!=0L)return 0;
-    if(ph_init_png() && cv_codec_begin(ph_width,ph_height) &&
-       ph_alloc())ok=ph_decode_rows();
+    if(!ph_init_png())cv_png_debug_stage=1;
+    else if(!cv_codec_begin(ph_width,ph_height))cv_png_debug_stage=2;
+    else if(!ph_alloc())cv_png_debug_stage=3;
+    else {
+        ok=ph_decode_rows();
+        if(!ok && !cv_png_debug_stage) {
+            cv_png_debug_stage=4;
+            cv_png_debug_output=ph_total_out;
+        }
+    }
     ph_cleanup();
     if(!ok)cv_codec_release();
     return ok;
