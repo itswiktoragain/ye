@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChronoView Image Converter</title><style>body{font:16px system-ui;margin:0;background:#eee;color:#111}main{max-width:680px;margin:24px auto;padding:20px;background:white;border:1px solid #bbb}button,input{font:inherit;padding:10px}button{background:#222;color:white;border:0}canvas{max-width:100%;image-rendering:pixelated;border:1px solid #888}p{line-height:1.45}</style></head><body><main><h1>ChronoView Converter</h1><p>Convert a PNG, JPEG or WebP photo into a 16-colour <b>.CV1</b> image for the Windows 1.04 viewer. Everything happens locally on your phone.</p><input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/*"><p><label>Max width <input id="width" type="number" min="8" max="640" value="256" style="width:90px"></label></p><button id="go">Convert &amp; download CV1</button><p id="info">Images are automatically reduced to fit a 64 KiB memory segment.</p><canvas id="canvas"></canvas></main><script>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChronoView Image Converter</title><style>body{font:16px system-ui;margin:0;background:#eee;color:#111}main{max-width:680px;margin:24px auto;padding:20px;background:white;border:1px solid #bbb}button,input{font:inherit;padding:10px}button{background:#222;color:white;border:0}canvas{max-width:100%;image-rendering:pixelated;border:1px solid #888}p{line-height:1.45}</style></head><body><main><h1>ChronoView Converter</h1><p>Convert a PNG, JPEG or WebP photo into a 16-colour <b>.CV1</b> image for the Windows 1.04 viewer. Everything happens locally on your phone.</p><input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/*"><p><label>Max width <input id="width" type="number" min="8" max="640" value="256" style="width:90px"></label></p><button id="go">Convert &amp; download CV1</button><p id="info">Images are automatically reduced to fit a 16 KiB image limit.</p><canvas id="canvas"></canvas></main><script>
 const palette=[[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]];
 document.getElementById('go').onclick=async()=>{
  const f=document.getElementById('file').files[0],info=document.getElementById('info');
@@ -6,9 +6,9 @@ document.getElementById('go').onclick=async()=>{
  let bmp;
  try{bmp=await createImageBitmap(f)}catch(e){info.textContent='Unable to decode this image in your browser.';return}
  const maxw=Math.min(640,Math.max(8,+document.getElementById('width').value||256));
- let scale=Math.min(1,maxw/bmp.width,480/bmp.height,Math.sqrt(60000/(bmp.width*bmp.height)));
+ let scale=Math.min(1,maxw/bmp.width,480/bmp.height,Math.sqrt(16384/(bmp.width*bmp.height)));
  let w=Math.max(1,Math.floor(bmp.width*scale)),h=Math.max(1,Math.floor(bmp.height*scale));
- while(w*h>60000){if(w>=h)w--;else h--;}
+ while(w*h>16384){if(w>=h)w--;else h--;}
  const canvas=document.getElementById('canvas');canvas.width=w;canvas.height=h;
  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(bmp,0,0,w,h);
  const rgba=ctx.getImageData(0,0,w,h).data;
