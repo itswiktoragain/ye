@@ -46,7 +46,7 @@ public final class WallfallClient implements ClientModInitializer {
         if (gravity == Direction.DOWN) {
             if (!player.isAlive() || player.isSpectator() || player.hasVehicle() ||
                     player.getAbilities().flying || !client.options.forwardKey.isPressed()) return;
-            Direction facing = Direction.fromRotation(player.getYaw());
+            Direction facing = player.getHorizontalFacing();
             if (WallLogic.hasWall(player, facing)) setDirection(player, facing, true);
             return;
         }
