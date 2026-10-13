@@ -9,7 +9,7 @@ import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.state.StateManager;
-import net.minecraft.state.property.DirectionProperty;
+import net.minecraft.state.property.EnumProperty;
 import net.minecraft.state.property.Properties;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -21,7 +21,7 @@ import org.jetbrains.annotations.Nullable;
 
 public final class RotatedSlabBlock extends BlockWithEntity {
     public static final MapCodec<RotatedSlabBlock> CODEC = createCodec(RotatedSlabBlock::new);
-    public static final DirectionProperty GRAVITY = Properties.FACING;
+    public static final EnumProperty<Direction> GRAVITY = Properties.FACING;
     private static final VoxelShape DOWN = Block.createCuboidShape(0, 0, 0, 16, 8, 16);
     private static final VoxelShape UP = Block.createCuboidShape(0, 8, 0, 16, 16, 16);
     private static final VoxelShape NORTH = Block.createCuboidShape(0, 0, 0, 16, 16, 8);
