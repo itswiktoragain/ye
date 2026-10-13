@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "io.wallfall.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["EntityGravityBoxMixin"],
+  "injectors": {"defaultRequire": 1}
+}

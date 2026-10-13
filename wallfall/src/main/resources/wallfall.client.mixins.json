@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "io.wallfall.mixin",
   "compatibilityLevel": "JAVA_21",
-  "client": ["CameraMixin", "LivingEntityTravelMixin", "LivingEntityJumpMixin"],
+  "client": ["CameraMixin", "LivingEntityTravelMixin", "LivingEntityJumpMixin", "PlayerRendererMixin"],
   "injectors": {"defaultRequire": 1}
 }

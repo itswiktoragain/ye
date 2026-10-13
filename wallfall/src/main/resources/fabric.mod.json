@@ -12,6 +12,7 @@
     "client": ["io.wallfall.WallfallClient"]
   },
   "mixins": [
+    "wallfall.mixins.json",
     { "config": "wallfall.client.mixins.json", "environment": "client" }
   ],
   "depends": {

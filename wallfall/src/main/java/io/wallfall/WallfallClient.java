@@ -16,7 +16,7 @@ public final class WallfallClient implements ClientModInitializer {
     private static Direction gravity = Direction.DOWN;
     private static UUID attachedPlayer;
     private static boolean jumpWasDown;
-    private static int airTicks, jumpGrace;
+    private static int airTicks, jumpGrace, switchCooldown;
     public static Direction getDirection() { return gravity; }
 
     @Override public void onInitializeClient() {
@@ -43,10 +43,13 @@ public final class WallfallClient implements ClientModInitializer {
         }
         if (!player.getUuid().equals(attachedPlayer)) {
             gravity = Direction.DOWN;
+            WallfallState.set(player, Direction.DOWN);
             attachedPlayer = player.getUuid();
             airTicks = 0;
             jumpGrace = 0;
+            switchCooldown = 0;
         }
+        if (switchCooldown > 0) switchCooldown--;
         boolean jump = client.options.jumpKey.isPressed();
         boolean justJumped = jump && !jumpWasDown;
         jumpWasDown = jump;
@@ -56,9 +59,9 @@ public final class WallfallClient implements ClientModInitializer {
             return;
         }
         if (gravity == Direction.DOWN) {
-            if (client.options.forwardKey.isPressed()) {
+            if (switchCooldown == 0 && client.options.forwardKey.isPressed()) {
                 Direction facing = player.getHorizontalFacing();
-                if (WallLogic.hasSurface(player, facing)) setDirection(player, facing, true);
+                if (WallLogic.hasSurface(player, facing) && WallfallState.canFit(player, facing)) setDirection(player, facing, true);
             }
             return;
         }
@@ -77,8 +80,8 @@ public final class WallfallClient implements ClientModInitializer {
 
         // At the top of a wall, roll around the edge onto the ceiling.
         if (gravity.getAxis().isHorizontal() &&
-                client.options.forwardKey.isPressed() && jumpGrace == 0 &&
-                WallLogic.hasSurface(player, Direction.UP)) {
+                client.options.forwardKey.isPressed() && jumpGrace == 0 && switchCooldown == 0 &&
+                WallLogic.hasSurface(player, Direction.UP) && WallfallState.canFit(player, Direction.UP)) {
             setDirection(player, Direction.UP, true);
             return;
         }
@@ -106,17 +109,21 @@ public final class WallfallClient implements ClientModInitializer {
             horizontal = new Vec3d(0, forward / len, 0)
                     .add(WallLogic.rightAlongWall(gravity).multiply(strafe / len));
         }
-        double acceleration = player.isSprinting() ? 0.080 : 0.065;
+        double acceleration = player.isSprinting() ? 0.058 : 0.043;
         Vec3d gravityAcceleration = WallLogic.axis(gravity).multiply(0.073);
         Vec3d current = player.getVelocity();
         // Preserve the outward jump impulse and add actual force toward the wall/ceiling.
-        Vec3d next = current.multiply(0.72)
+        Vec3d next = current.multiply(0.78)
                 .add(gravityAcceleration)
                 .add(horizontal.multiply(acceleration));
-        next = new Vec3d(Math.max(-0.55, Math.min(0.55, next.x)),
-                Math.max(-0.55, Math.min(0.55, next.y)),
-                Math.max(-0.55, Math.min(0.55, next.z)));
+        next = new Vec3d(Math.max(-0.32, Math.min(0.32, next.x)),
+                Math.max(-0.32, Math.min(0.32, next.y)),
+                Math.max(-0.32, Math.min(0.32, next.z)));
 
+        if (!Double.isFinite(next.x) || !Double.isFinite(next.y) || !Double.isFinite(next.z)) {
+            player.setVelocity(Vec3d.ZERO);
+            return;
+        }
         Vec3d oldPos = player.getPos();
         player.move(MovementType.SELF, next);
         Vec3d moved = player.getPos().subtract(oldPos);
@@ -132,6 +139,8 @@ public final class WallfallClient implements ClientModInitializer {
     private static void setDirection(ClientPlayerEntity player, Direction next, boolean sync) {
         if (gravity == next) return;
         gravity = next;
+        WallfallState.set(player, next);
+        switchCooldown = 12;
         attachedPlayer = player.getUuid();
         airTicks = 0;
         jumpGrace = 0;

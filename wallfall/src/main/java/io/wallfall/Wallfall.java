@@ -51,6 +51,7 @@ public final class Wallfall implements ModInitializer {
         if (old == direction) return;
         if (direction == Direction.DOWN) STATES.remove(player.getUuid());
         else STATES.put(player.getUuid(), new GravityState(direction));
+        WallfallState.set(player, direction);
         player.setNoGravity(direction != Direction.DOWN);
         player.fallDistance = 0;
         ServerPlayNetworking.send(player, GravityPayload.of(direction));
@@ -80,7 +81,7 @@ public final class Wallfall implements ModInitializer {
                 if (payload.code() > 5) return;
                 Direction next = payload.direction();
                 if (next != Direction.DOWN &&
-                        (!player.isAlive() || player.hasVehicle() || !WallLogic.hasSurface(player, next))) {
+                        (!player.isAlive() || player.hasVehicle() || !WallLogic.hasSurface(player, next) || !WallfallState.canFit(player, next))) {
                     ServerPlayNetworking.send(player, GravityPayload.of(gravity(player)));
                     return;
                 }
@@ -108,7 +109,10 @@ public final class Wallfall implements ModInitializer {
         });
 
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
-                STATES.remove(handler.getPlayer().getUuid()));
+                {
+            WallfallState.set(handler.getPlayer(), Direction.DOWN);
+            STATES.remove(handler.getPlayer().getUuid());
+        });
 
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
             if (!(player instanceof ServerPlayerEntity serverPlayer) && !world.isClient()) return ActionResult.PASS;

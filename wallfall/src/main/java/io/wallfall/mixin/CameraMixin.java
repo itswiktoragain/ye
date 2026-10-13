@@ -26,8 +26,9 @@ public abstract class CameraMixin {
         Camera self = (Camera) (Object) this;
         Quaternionf tilt = new Quaternionf().rotationTo(
                 new Vector3f(0, -1, 0),
-                new Vector3f(wall.getOffsetX(), 0, wall.getOffsetZ())
+                new Vector3f(wall.getOffsetX(), wall.getOffsetY(), wall.getOffsetZ())
         );
-        self.getRotation().premul(tilt);
+        if (Float.isFinite(tilt.x) && Float.isFinite(tilt.y) && Float.isFinite(tilt.z) && Float.isFinite(tilt.w))
+            self.getRotation().premul(tilt.normalize());
     }
 }
