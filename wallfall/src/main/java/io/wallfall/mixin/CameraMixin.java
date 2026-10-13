@@ -1,6 +1,9 @@
 package io.wallfall.mixin;
 
 import io.wallfall.WallfallClient;
+import io.wallfall.WallLogic;
+import net.minecraft.util.math.Vec3d;
+import org.spongepowered.asm.mixin.Shadow;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.Camera;
 import net.minecraft.entity.Entity;
@@ -15,6 +18,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(Camera.class)
 public abstract class CameraMixin {
+    @Shadow protected abstract void setPos(Vec3d pos);
     @Inject(method = "update", at = @At("TAIL"))
     private void wallfall$orientCamera(BlockView area, Entity focusedEntity,
                                        boolean thirdPerson, boolean inverseView, float tickDelta,
@@ -28,7 +32,13 @@ public abstract class CameraMixin {
                 new Vector3f(0, -1, 0),
                 new Vector3f(wall.getOffsetX(), wall.getOffsetY(), wall.getOffsetZ())
         );
-        if (Float.isFinite(tilt.x) && Float.isFinite(tilt.y) && Float.isFinite(tilt.z) && Float.isFinite(tilt.w))
+        if (Float.isFinite(tilt.x) && Float.isFinite(tilt.y) && Float.isFinite(tilt.z) && Float.isFinite(tilt.w)) {
             self.getRotation().premul(tilt.normalize());
+            Vec3d interpolatedFoot = focusedEntity.getLerpedPos(tickDelta);
+            double eye = focusedEntity.getEyeHeight(focusedEntity.getPose());
+            Vec3d orientedEye = interpolatedFoot.subtract(WallLogic.axis(wall).multiply(eye));
+            if (Double.isFinite(orientedEye.x) && Double.isFinite(orientedEye.y) && Double.isFinite(orientedEye.z))
+                setPos(orientedEye);
+        }
     }
 }

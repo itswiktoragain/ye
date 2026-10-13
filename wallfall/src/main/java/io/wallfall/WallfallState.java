@@ -22,6 +22,9 @@ public final class WallfallState {
         Direction old = get(entity);
         if (direction == Direction.DOWN) STATES.remove(entity);
         else STATES.put(entity, direction);
+        if (old == Direction.UP && direction == Direction.DOWN) {
+            entity.setPosition(entity.getPos().add(0, -entity.getHeight(), 0));
+        }
         if (old == Direction.DOWN && direction.getAxis().isHorizontal() &&
                 entity.isOnGround()) {
             // Lift the newly sideways player clear of the floor.
@@ -39,9 +42,9 @@ public final class WallfallState {
             case SOUTH -> new Box(p.x-half, p.y-half, p.z-h, p.x+half, p.y+half, p.z);
             case WEST -> new Box(p.x, p.y-half, p.z-half, p.x+h, p.y+half, p.z+half);
             case EAST -> new Box(p.x-h, p.y-half, p.z-half, p.x, p.y+half, p.z+half);
-            // On the ceiling the hitbox stays world-axis aligned while acceleration
-            // and rendering invert. This avoids forcing the player into ceiling blocks.
-            case UP, DOWN -> new Box(p.x-half, p.y, p.z-half, p.x+half, p.y+h, p.z+half);
+            // Invert vertical anchoring: feet attach to ceiling, body extends downward.
+            case UP -> new Box(p.x-half, p.y-h, p.z-half, p.x+half, p.y, p.z+half);
+            case DOWN -> new Box(p.x-half, p.y, p.z-half, p.x+half, p.y+h, p.z+half);
         };
     }
 
