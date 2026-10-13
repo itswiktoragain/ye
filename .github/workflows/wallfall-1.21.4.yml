@@ -1,0 +1,39 @@
+name: Build Wallfall Fabric 1.21.4
+on:
+  push:
+    branches:
+      - agent/wallfall-fabric-1.21.4
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  wallfall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: wallfall
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+      - name: Build Fabric 1.21.4 mod
+        run: gradle --no-daemon build --stacktrace
+      - name: Verify JAR contents
+        run: |
+          JAR="$(find build/libs -maxdepth 1 -name 'wallfall-fabric-1.21.4-*.jar' ! -name '*sources*' | head -1)"
+          test -n "$JAR"
+          jar tf "$JAR" | grep 'fabric.mod.json'
+          jar tf "$JAR" | grep 'io/wallfall/Wallfall.class'
+          jar tf "$JAR" | grep 'io/wallfall/mixin/CameraMixin.class'
+      - name: Upload installable JAR
+        uses: actions/upload-artifact@v7
+        with:
+          path: wallfall/build/libs/wallfall-fabric-1.21.4-1.0.0.jar
+          archive: false
+          if-no-files-found: error

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "wallfall",
+  "version": "${version}",
+  "name": "Wallfall",
+  "description": "Walk towards a wall to change gravity onto it and drop when you run out of wall.",
+  "authors": ["Wallfall contributors"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["io.wallfall.Wallfall"],
+    "client": ["io.wallfall.WallfallClient"]
+  },
+  "mixins": [
+    { "config": "wallfall.client.mixins.json", "environment": "client" }
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
