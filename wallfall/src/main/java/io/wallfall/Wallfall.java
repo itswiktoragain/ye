@@ -36,7 +36,6 @@ public final class Wallfall implements ModInitializer {
     private static final class GravityState {
         Direction direction;
         int jumpGrace = 0;
-        int missingTicks = 0;
         GravityState(Direction direction) { this.direction = direction; }
     }
     private static final Map<UUID, GravityState> STATES = new HashMap<>();
@@ -81,7 +80,9 @@ public final class Wallfall implements ModInitializer {
                 if (payload.code() > 5) return;
                 Direction next = payload.direction();
                 if (next != Direction.DOWN &&
-                        (!player.isAlive() || player.hasVehicle() || !WallLogic.hasSurface(player, next) || !WallfallState.canFit(player, next))) {
+                        (!player.isAlive() || player.hasVehicle() ||
+                        (next != Direction.UP && !WallLogic.hasSurface(player, next)) ||
+                        !WallfallState.canFit(player, next))) {
                     ServerPlayNetworking.send(player, GravityPayload.of(gravity(player)));
                     return;
                 }
@@ -100,11 +101,7 @@ public final class Wallfall implements ModInitializer {
                 player.setNoGravity(true);
                 player.fallDistance = 0;
                 if (state.jumpGrace > 0) state.jumpGrace--;
-                if (WallLogic.hasSurface(player, state.direction)) state.missingTicks = 0;
-                else state.missingTicks++;
-                if (state.jumpGrace == 0 && state.missingTicks >= 5) {
-                    set(player, Direction.DOWN);
-                }
+                // Gravity direction intentionally persists beyond ledges.
             }
         });
 
