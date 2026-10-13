@@ -6,19 +6,31 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
 public final class WallLogic {
-    private WallLogic() { }
+    private WallLogic() {}
 
-    public static boolean hasWall(PlayerEntity player, Direction side) {
-        if (!side.getAxis().isHorizontal()) return false;
-        Box b = player.getBoundingBox();
-        Box sample = new Box(
-                b.minX + 0.065, b.minY + 0.20, b.minZ + 0.065,
-                b.maxX - 0.065, b.minY + 0.82, b.maxZ - 0.065
-        );
-        Box towardWall = sample.offset(
-                side.getOffsetX() * 0.34, 0, side.getOffsetZ() * 0.34
-        );
-        return !player.getWorld().isSpaceEmpty(player, towardWall);
+    // Check a narrow strip between a player's hitbox and the prospective surface.
+    // This detects walls, floors and ceilings without treating a jump as an edge.
+    public static boolean hasSurface(PlayerEntity player, Direction gravity) {
+        if (gravity == Direction.DOWN) return true;
+        Box box = player.getBoundingBox();
+        Box probe = switch (gravity) {
+            case NORTH -> new Box(box.minX + .05, box.minY + .14, box.minZ - .45,
+                    box.maxX - .05, box.maxY - .14, box.minZ + .06);
+            case SOUTH -> new Box(box.minX + .05, box.minY + .14, box.maxZ - .06,
+                    box.maxX - .05, box.maxY - .14, box.maxZ + .45);
+            case WEST -> new Box(box.minX - .45, box.minY + .14, box.minZ + .05,
+                    box.minX + .06, box.maxY - .14, box.maxZ - .05);
+            case EAST -> new Box(box.maxX - .06, box.minY + .14, box.minZ + .05,
+                    box.maxX + .45, box.maxY - .14, box.maxZ - .05);
+            case UP -> new Box(box.minX + .05, box.maxY - .06, box.minZ + .05,
+                    box.maxX - .05, box.maxY + .45, box.maxZ - .05);
+            default -> box;
+        };
+        return !player.getWorld().isSpaceEmpty(player, probe);
+    }
+
+    public static Vec3d axis(Direction dir) {
+        return new Vec3d(dir.getOffsetX(), dir.getOffsetY(), dir.getOffsetZ());
     }
 
     public static Vec3d rightAlongWall(Direction wall) {
