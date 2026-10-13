@@ -17,6 +17,8 @@ import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.registry.Registry;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Identifier;
@@ -56,8 +58,10 @@ public final class Wallfall implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        ROTATED_SLAB = Registry.register(Registries.BLOCK, Identifier.of("wallfall", "rotated_slab"),
-                new RotatedSlabBlock(Block.Settings.create().strength(2.0f).nonOpaque()));
+        Identifier blockId = Identifier.of("wallfall", "rotated_slab");
+        RegistryKey<Block> blockKey = RegistryKey.of(RegistryKeys.BLOCK, blockId);
+        ROTATED_SLAB = Registry.register(Registries.BLOCK, blockKey,
+                new RotatedSlabBlock(Block.Settings.create().registryKey(blockKey).strength(2.0f).nonOpaque()));
         ROTATED_SLAB_BE = Registry.register(Registries.BLOCK_ENTITY_TYPE,
                 Identifier.of("wallfall", "rotated_slab"),
                 FabricBlockEntityTypeBuilder.create(RotatedSlabBlockEntity::new, ROTATED_SLAB).build());
