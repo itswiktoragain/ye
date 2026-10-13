@@ -17,7 +17,7 @@ public abstract class EntityGravityBoxMixin {
         Entity self = (Entity)(Object)this;
         if (!(self instanceof PlayerEntity)) return;
         Direction gravity = WallfallState.get(self);
-        if (gravity.getAxis().isHorizontal())
+        if (gravity != Direction.DOWN)
             cir.setReturnValue(WallfallState.rotatedBox(self, gravity));
     }
 }
