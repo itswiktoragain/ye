@@ -108,9 +108,14 @@ public final class Wallfall implements ModInitializer {
             }
         });
 
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            handler.getPlayer().setNoGravity(false);
+            WallfallState.set(handler.getPlayer(), Direction.DOWN);
+        });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
                 {
             WallfallState.set(handler.getPlayer(), Direction.DOWN);
+            handler.getPlayer().setNoGravity(false);
             STATES.remove(handler.getPlayer().getUuid());
         });
 

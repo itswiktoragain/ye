@@ -6,11 +6,12 @@ import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import java.util.Map;
+import java.util.Collections;
 import java.util.WeakHashMap;
 
 /** Server and client track separate Entity objects and their authoritative orientation. */
 public final class WallfallState {
-    private static final Map<Entity, Direction> STATES = new WeakHashMap<>();
+    private static final Map<Entity, Direction> STATES = Collections.synchronizedMap(new WeakHashMap<>());
     private WallfallState() {}
 
     public static Direction get(Entity entity) {
