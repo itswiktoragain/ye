@@ -1,6 +1,7 @@
 package io.wallfall;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.object.builder.v1.block.entity.FabricBlockEntityTypeBuilder;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
@@ -59,7 +60,7 @@ public final class Wallfall implements ModInitializer {
                 new RotatedSlabBlock(Block.Settings.create().strength(2.0f).nonOpaque()));
         ROTATED_SLAB_BE = Registry.register(Registries.BLOCK_ENTITY_TYPE,
                 Identifier.of("wallfall", "rotated_slab"),
-                BlockEntityType.Builder.create(RotatedSlabBlockEntity::new, ROTATED_SLAB).build());
+                FabricBlockEntityTypeBuilder.create(RotatedSlabBlockEntity::new, ROTATED_SLAB).build());
 
         PayloadTypeRegistry.playC2S().register(GravityPayload.ID, GravityPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(GravityPayload.ID, GravityPayload.CODEC);
