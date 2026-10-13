@@ -30,6 +30,7 @@ public final class WallfallClient implements ClientModInitializer {
                     }
                 }));
         ClientTickEvents.START_CLIENT_TICK.register(WallfallClient::tick);
+        System.out.println("WALLFALL_CLIENT_READY");
     }
 
     private static void tick(MinecraftClient client) {
