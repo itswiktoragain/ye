@@ -31,9 +31,36 @@ jobs:
           jar tf "$JAR" | grep 'fabric.mod.json'
           jar tf "$JAR" | grep 'io/wallfall/Wallfall.class'
           jar tf "$JAR" | grep 'io/wallfall/mixin/CameraMixin.class'
+      - name: Test Minecraft client startup
+        shell: bash
+        run: |
+          xvfb-run -a timeout 120s gradle runClient --no-daemon > client-smoke.log 2>&1 &
+          process_id=$!
+          ready=0
+          for attempt in $(seq 1 100); do
+            if grep -q 'WALLFALL_CLIENT_READY' client-smoke.log; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$process_id" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ "$ready" = 1 ]; then sleep 5; fi
+          if grep -E 'Block id not set|Could not execute entrypoint|Game crashed|Mixin apply failed' client-smoke.log; then ready=0; fi
+          kill "$process_id" 2>/dev/null || true
+          wait "$process_id" 2>/dev/null || true
+          tail -n 80 client-smoke.log
+          test "$ready" = 1
+      - name: Upload client test log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: wallfall-client-test-log
+          path: wallfall/client-smoke.log
+          if-no-files-found: ignore
       - name: Upload installable JAR
         uses: actions/upload-artifact@v7
         with:
-          path: wallfall/build/libs/wallfall-fabric-1.21.4-1.0.0.jar
+          path: wallfall/build/libs/wallfall-fabric-1.21.4-2.0.1.jar
           archive: false
           if-no-files-found: error
