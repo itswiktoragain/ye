@@ -1,0 +1,46 @@
+name: Armpaba ISO build
+on:
+  push:
+    branches: [agent/armpaba]
+    paths:
+      - 'armpaba/**'
+      - '.github/workflows/armpaba-iso.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y live-build debootstrap squashfs-tools xorriso \
+            grub-pc-bin grub-efi-amd64-bin mtools dosfstools qemu-system-arm \
+            qemu-system-x86 qemu-efi-aarch64 python3
+      - name: Source lint and tests
+        run: |
+          bash -n armpaba/build-iso.sh armpaba/src/install.sh armpaba/src/xsession.sh
+          python3 -m compileall -q armpaba/src
+          python3 -m unittest discover -s armpaba/tests -v
+      - name: Build bootable ISO
+        run: sudo env ARMPABA_BUILD_WORK="$GITHUB_WORKSPACE/armpaba/.work" ARMPABA_OUTPUT="$GITHUB_WORKSPACE/Armpaba-x86_64.iso" bash armpaba/build-iso.sh
+      - name: Validate ISO El Torito EFI boot entries
+        run: |
+          test -s Armpaba-x86_64.iso
+          xorriso -indev Armpaba-x86_64.iso -report_el_torito plain | tee iso-boot-report.txt
+          xorriso -indev Armpaba-x86_64.iso -find /live -type f -print | tee iso-files.txt
+          grep -qi EFI iso-boot-report.txt
+      - name: Upload ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Armpaba-x86_64-ISO
+          path: |
+            Armpaba-x86_64.iso
+            Armpaba-x86_64.iso.sha256
+            iso-boot-report.txt
+          if-no-files-found: error
+          retention-days: 7
