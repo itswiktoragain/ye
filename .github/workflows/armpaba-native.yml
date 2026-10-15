@@ -1,0 +1,52 @@
+name: Armpaba native UEFI translator ISO
+on:
+  push:
+    branches: [agent/armpaba-native]
+    paths:
+      - 'armpaba-native/**'
+      - '.github/workflows/armpaba-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install EFI build and x86 UEFI smoke-test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm xorriso mtools qemu-system-x86 ovmf
+      - name: Compile EFI translation loader and test ARM64 binary
+        run: |
+          cd armpaba-native
+          bash scripts/build.sh
+      - name: Boot translator through x86_64 OVMF, no ARM emulator
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd armpaba-native
+          cp /usr/share/OVMF/OVMF_VARS_4M.fd build/ovmf-vars.fd
+          timeout 50s qemu-system-x86_64 -machine q35,accel=tcg -m 512 -display none -monitor none \
+            -serial file:build/ovmf-serial.log \
+            -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+            -drive if=pflash,format=raw,file=build/ovmf-vars.fd \
+            -cdrom build/Armpaba-NativeTranslator-x86_64.iso -boot d || test $? -eq 124
+          cat build/ovmf-serial.log
+          grep -q 'ARMPABA / NATIVE ARM64 TRANSLATOR' build/ovmf-serial.log
+          grep -q 'ARM64 entry returned. x0 = 0x000000000000002A' build/ovmf-serial.log
+      - name: Upload ISO, EFI binaries, tests and serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Armpaba-NativeTranslator-ISO
+          path: |
+            armpaba-native/build/Armpaba-NativeTranslator-x86_64.iso
+            armpaba-native/build/Armpaba-NativeTranslator-x86_64.iso.sha256
+            armpaba-native/build/BOOTX64.EFI
+            armpaba-native/build/BOOTAA64.EFI
+            armpaba-native/build/ovmf-serial.log
+            armpaba-native/build/boot-report.txt
+          if-no-files-found: warn
+          retention-days: 14
