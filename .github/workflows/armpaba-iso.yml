@@ -14,25 +14,30 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - name: Install build dependencies
+      - name: Build on Debian 13 (matches live-build target)
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y live-build debootstrap squashfs-tools xorriso \
-            grub-pc-bin grub-efi-amd64-bin mtools dosfstools qemu-system-arm \
-            qemu-system-x86 qemu-efi-aarch64 python3
-      - name: Source lint and tests
-        run: |
-          bash -n armpaba/build-iso.sh armpaba/src/install.sh armpaba/src/xsession.sh
-          python3 -m compileall -q armpaba/src
-          python3 -m unittest discover -s armpaba/tests -v
-      - name: Build bootable ISO
-        run: sudo env ARMPABA_BUILD_WORK="$GITHUB_WORKSPACE/armpaba/.work" ARMPABA_OUTPUT="$GITHUB_WORKSPACE/Armpaba-x86_64.iso" bash armpaba/build-iso.sh
-      - name: Validate ISO El Torito EFI boot entries
-        run: |
-          test -s Armpaba-x86_64.iso
-          xorriso -indev Armpaba-x86_64.iso -report_el_torito plain | tee iso-boot-report.txt
-          xorriso -indev Armpaba-x86_64.iso -find /live -type f -print | tee iso-files.txt
-          grep -qi EFI iso-boot-report.txt
+          set -Eeuo pipefail
+          docker run --rm --privileged \
+            -v "$GITHUB_WORKSPACE:/work" -w /work \
+            -e DEBIAN_FRONTEND=noninteractive \
+            debian:trixie bash -Eeuo pipefail -c '
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                live-build debootstrap squashfs-tools xorriso \
+                grub-common grub2-common grub-pc-bin grub-efi-amd64-bin \
+                mtools dosfstools ca-certificates python3
+              bash -n armpaba/build-iso.sh armpaba/src/install.sh armpaba/src/xsession.sh
+              python3 -m compileall -q armpaba/src
+              python3 -m unittest discover -s armpaba/tests -v
+              ARMPABA_BUILD_WORK=/work/armpaba/.work \
+                ARMPABA_OUTPUT=/work/Armpaba-x86_64.iso \
+                bash armpaba/build-iso.sh
+              test -s Armpaba-x86_64.iso
+              xorriso -indev Armpaba-x86_64.iso -report_el_torito plain | tee iso-boot-report.txt
+              xorriso -indev Armpaba-x86_64.iso -find /live -type f -print | tee iso-files.txt
+              grep -qi EFI iso-boot-report.txt
+            '
       - name: Upload ISO
         if: success()
         uses: actions/upload-artifact@v4
