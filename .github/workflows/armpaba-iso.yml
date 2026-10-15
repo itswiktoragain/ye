@@ -35,11 +35,12 @@ jobs:
                 bash armpaba/build-iso.sh
               test -s Armpaba-x86_64.iso
               xorriso -indev Armpaba-x86_64.iso -report_el_torito plain | tee iso-boot-report.txt
-              xorriso -indev Armpaba-x86_64.iso -find /live -type f -print | tee iso-files.txt
+              xorriso -indev Armpaba-x86_64.iso -ls /live | tee iso-files.txt
+              grep -q filesystem.squashfs iso-files.txt
               grep -qi EFI iso-boot-report.txt
             '
       - name: Upload ISO
-        if: success()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: Armpaba-x86_64-ISO
@@ -47,5 +48,5 @@ jobs:
             Armpaba-x86_64.iso
             Armpaba-x86_64.iso.sha256
             iso-boot-report.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
