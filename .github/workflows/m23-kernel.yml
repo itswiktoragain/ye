@@ -1,0 +1,49 @@
+name: M23 ARM64 kernel experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent/m23-debian-kernel]
+    paths:
+      - '.github/workflows/m23-kernel.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - name: Install ARM64 LLVM build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld git make gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev python3 python3-ply device-tree-compiler rsync cpio pahole
+      - name: Get M23 kernel source
+        run: |
+          git clone --depth 1 --branch lineage-23.2 https://github.com/Aflaungos/android_kernel_samsung_sm7225_testing.git kernel
+      - name: Build ARM64 kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ARCH=arm64
+          export LLVM=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          mkdir -p build
+          make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 vendor/lineage-m23xq_defconfig
+          scripts/kernel-doc --help >/dev/null 2>&1 || true
+          kernel/scripts/config --file build/.config --disable COMPAT_VDSO --enable DEVTMPFS --enable DEVTMPFS_MOUNT
+          make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 olddefconfig
+          make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 -j2 Image
+          test -s build/arch/arm64/boot/Image
+          mkdir -p artifacts
+          cp build/arch/arm64/boot/Image artifacts/Image
+          cp build/.config artifacts/kernel.config
+          sha256sum artifacts/Image > artifacts/Image.sha256
+      - name: Publish kernel artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m23-kernel-experimental
+          path: artifacts/
+          if-no-files-found: warn
