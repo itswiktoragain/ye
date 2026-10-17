@@ -18,7 +18,7 @@ jobs:
       - name: Install device-tree cross-build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq device-tree-compiler clang lld gcc-aarch64-linux-gnu \
+          sudo apt-get install -y -qq device-tree-compiler clang llvm lld gcc-aarch64-linux-gnu \
             bc bison flex libssl-dev libelf-dev python3 make
 
       - name: Fetch M23 kernel source only, no Android firmware
@@ -34,7 +34,7 @@ jobs:
           make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- vendor/lineage-m23xq_defconfig
           make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- -j2 arch/arm64/boot/dts/vendor/qcom/lagoon.dtb
+            CROSS_COMPILE=aarch64-linux-gnu- -j2 vendor/qcom/lagoon.dtb
           BASE="build/arch/arm64/boot/dts/vendor/qcom/lagoon.dtb"
           test -s "$BASE"
           cp "$BASE" out/base-lagoon.dtb
