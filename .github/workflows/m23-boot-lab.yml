@@ -1,0 +1,78 @@
+name: M23 Boot Lab - ARM64 QEMU
+
+on:
+  push:
+    branches: [agent/m23-boot-lab]
+    paths:
+      - '.github/workflows/m23-boot-lab.yml'
+      - 'tools/m23-boot-lab/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  emulate:
+    name: Run ARM64 and M23 kernel experiments
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native QEMU and ARM64 tools (no Android)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-arm clang lld gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build native ARM64 smoke program
+        run: |
+          mkdir -p artifacts reports
+          clang --target=aarch64-none-elf -nostdlib -fuse-ld=lld -Wl,-T,tools/m23-boot-lab/smoke.ld -o artifacts/smoke.elf tools/m23-boot-lab/smoke.S
+          file artifacts/smoke.elf
+          python3 -m py_compile tools/m23-boot-lab/m23emu.py
+
+      - name: Execute real guest AArch64 smoke instructions
+        run: |
+          python3 tools/m23-boot-lab/m23emu.py smoke --elf artifacts/smoke.elf --out reports/smoke --seconds 5
+
+      - name: Retrieve previously compiled real M23 Linux kernel from Ye
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38921194504
+          name: m23-kernel-experimental
+          github-token: ${{ github.token }}
+          path: artifacts/m23-kernel
+
+      - name: Compile genuine AArch64 Linux PID 1 diagnostic
+        run: |
+          aarch64-linux-gnu-gcc -static -Os -s -o artifacts/probe-init tools/m23-boot-lab/probe-init.c
+          python3 tools/m23-boot-lab/m23emu.py pack-init --binary artifacts/probe-init --out artifacts/initramfs.cpio.gz
+          test -s artifacts/m23-kernel/Image
+          file artifacts/m23-kernel/Image artifacts/probe-init
+          grep -E '^CONFIG_(SERIAL_AMBA_PL011_CONSOLE|VIRTIO_BLK|DEVTMPFS)=' artifacts/m23-kernel/kernel.config || true
+
+      - name: Execute M23-derived ARM64 kernel against QEMU virtual devices
+        run: |
+          python3 tools/m23-boot-lab/m23emu.py run --kernel artifacts/m23-kernel/Image --ramdisk artifacts/initramfs.cpio.gz --out reports/m23-kernel --seconds 20
+          python3 - <<'PY'
+          import json, pathlib, os
+          root=pathlib.Path("reports")
+          for report in sorted(root.glob("*/report.json")):
+              data=json.loads(report.read_text())
+              summary=(f"### {report.parent.name}\n\n"
+                       f"- CPU instructions disassembled: {data['guest_instructions_disassembled']}\n"
+                       f"- Linux kernel console observed: {data['linux_kernel_console_observed']}\n"
+                       f"- Early Linux PID 1 reached: {data['guest_pid1_marker']}\n"
+                       f"- Stop reason: {data['stop_reason']}\n\n")
+              with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as out: out.write(summary)
+              print(summary)
+          PY
+
+      - name: Upload boot and trace reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m23-boot-lab-reports
+          path: reports/
+          if-no-files-found: warn
