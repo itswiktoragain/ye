@@ -1,0 +1,62 @@
+name: Galaxy M23 board DTB validation
+
+on:
+  push:
+    branches: [agent/m23-board-dtb]
+    paths:
+      - '.github/workflows/m23-board-dtb.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  board-trees:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install device-tree cross-build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler clang lld gcc-aarch64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev python3 make
+
+      - name: Fetch M23 kernel source only, no Android firmware
+        run: |
+          git clone --depth 1 --branch lineage-23.2 \
+            https://github.com/Aflaungos/android_kernel_samsung_sm7225_testing.git kernel
+
+      - name: Build Lagoon base DTB and Samsung M23 revision overlays
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build out/variants
+          make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- vendor/lineage-m23xq_defconfig
+          make -C kernel O="$PWD/build" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- -j2 arch/arm64/boot/dts/vendor/qcom/lagoon.dtb
+          BASE="build/arch/arm64/boot/dts/vendor/qcom/lagoon.dtb"
+          test -s "$BASE"
+          cp "$BASE" out/base-lagoon.dtb
+          for r in 00 01 03 04; do
+            src="kernel/arch/arm64/boot/dts/samsung/m23/m23xq/m23xq_eur_open_w00_r$r.dts"
+            overlay="out/variants/rev-$r.dtbo"
+            merged="out/variants/rev-$r.merged.dtb"
+            dtc -@ -I dts -O dtb -o "$overlay" "$src"
+            echo "Overlay rev $r compiled: $(stat -c '%s' "$overlay") bytes"
+            fdtoverlay -i "$BASE" -o "$merged" "$overlay"
+            test -s "$merged"
+            dtc -I dtb -O dts -o "out/variants/rev-$r.decompiled.dts" "$merged" 2>/dev/null
+            grep -E 'Samsung M23XQ|ufshc|qcom,ufs-phy' "out/variants/rev-$r.decompiled.dts" | head -n 8 || true
+            sha256sum "$overlay" "$merged"
+          done
+          (cd out && sha256sum base-lagoon.dtb variants/*.dtbo variants/*.merged.dtb >SHA256SUMS)
+          echo "All four hardware-revision overlays compiled and applied"
+
+      - name: Upload real DTB build results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m23-board-revisions
+          path: out/
+          if-no-files-found: warn
