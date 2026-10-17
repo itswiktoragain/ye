@@ -99,7 +99,7 @@ def execute(args, smoke=False):
                '-m', '512' if smoke else '2048', '-display', 'none',
                '-monitor', 'none', '-no-reboot',
                '-serial', 'file:' + str(out / 'serial.log'),
-               '-D', str(out / 'trace.log'), '-d', 'in_asm,guest_errors,unimp',
+               '-D', str(out / 'trace.log'), '-d', 'in_asm,int,guest_errors,unimp,cpu_reset',
                '-kernel', str(kernel)]
         if ramdisk:
             cmd += ['-initrd', str(ramdisk)]
@@ -137,8 +137,11 @@ def execute(args, smoke=False):
         uart = (out/'serial.log').read_text(errors='replace') if (out/'serial.log').exists() else ''
         errors = (out/'qemu-stderr.log').read_text(errors='replace')
         tracepath = out/'trace.log'
-        tracehead = tracepath.read_bytes()[:64000].decode('utf-8', 'replace') if tracepath.exists() else ''
+        tracebytes = tracepath.read_bytes() if tracepath.exists() else b''
+        tracehead = tracebytes[:64000].decode('utf-8', 'replace')
+        tracetail = tracebytes[-64000:].decode('utf-8', 'replace')
         (out/'trace-head.log').write_text(tracehead)
+        (out/'trace-tail.log').write_text(tracetail)
         tracepath.unlink(missing_ok=True)
         report = {
             'mode': 'smoke' if smoke else 'M23-kernel-on-generic-QEMU-virt',
@@ -150,6 +153,7 @@ def execute(args, smoke=False):
             'guest_pid1_marker': 'M23BOOTLAB: PID1 REACHED' in uart,
             'guest_kernel_panic_observed': 'Kernel panic' in uart,
             'uart_tail': uart[-3000:], 'qemu_errors_tail': errors[-1000:],
+            'trace_tail_excerpt': tracetail[-3000:],
             'limitations': 'Generic QEMU virt, NOT an SM7225/M23 emulator; no Samsung bootloader, UFS, SDE, or Adreno. Serial silence can be missing PL011 support.'
         }
         (out/'report.json').write_text(json.dumps(report, indent=2) + '\n')
