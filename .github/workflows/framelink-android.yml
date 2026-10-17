@@ -1,0 +1,38 @@
+name: FrameLink Android APK
+on:
+  push:
+    branches:
+      - agent/framelink-android
+    paths:
+      - 'framelink/**'
+      - '.github/workflows/framelink-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build FrameLink APK
+        run: gradle --no-daemon -p framelink :app:assembleDebug --stacktrace
+      - name: Upload installable debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrameLink-Android-debug-APK
+          path: framelink/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
