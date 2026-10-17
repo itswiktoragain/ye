@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanRecord;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
@@ -21,11 +22,13 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Handler;
+import android.os.ParcelUuid;
 import android.os.Looper;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -41,6 +44,7 @@ public final class GoProBleClient {
         void onFound(BluetoothDevice device, String name, CameraDiscovery.Match match,
                      int rssi, boolean bleTransport);
         void onScanFinished(int totalDevices, int cameras);
+        void onDiagnostic(String event);
         void onReady(String name);
         void onWifiCredentials(String ssid, String password);
         void onDisconnected();
@@ -51,7 +55,13 @@ public final class GoProBleClient {
         return UUID.fromString(String.format(java.util.Locale.US, BASE, value));
     }
 
-    private static final UUID CMD_SERVICE = uuid(0x0001);
+    // Official Open GoPro: 0xFEA6 is Control and Query, 0x0001 is Wi-Fi AP.
+    private static final UUID CMD_SERVICE =
+        UUID.fromString("0000fea6-0000-1000-8000-00805f9b34fb");
+    private static final UUID WIFI_AP_SERVICE = uuid(0x0001);
+    private static final UUID MGMT_SERVICE = uuid(0x0090);
+    private static final UUID MGMT_WRITE = uuid(0x0091);
+    private static final UUID MGMT_RESPONSE = uuid(0x0092);
     private static final UUID CMD_WRITE = uuid(0x0072);
     private static final UUID CMD_RESPONSE = uuid(0x0073);
     private static final UUID SSID_CHARACTERISTIC = uuid(0x0002);
@@ -61,7 +71,15 @@ public final class GoProBleClient {
     private final Context context;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final ArrayDeque<byte[]> pending = new ArrayDeque<>();
+    private static final class PacketToSend {
+        final BluetoothGattCharacteristic characteristic;
+        final byte[] payload;
+        PacketToSend(BluetoothGattCharacteristic characteristic, byte[] payload) {
+            this.characteristic = characteristic;
+            this.payload = payload;
+        }
+    }
+    private final ArrayDeque<PacketToSend> pending = new ArrayDeque<>();
     private final Map<String, String> discovered = new HashMap<>();
     private final Map<String, Boolean> cameraFlags = new HashMap<>();
     private BluetoothAdapter adapter;
@@ -74,6 +92,14 @@ public final class GoProBleClient {
     private String expectedAlias = "Moneyman";
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
+    private ScanCallback priorityScanCallback;
+    private Runnable connectionTimeout;
+    private Runnable pairingFallbackTimeout;
+    private boolean awaitingBond;
+    private boolean notifyingManagement;
+    private BluetoothGattCharacteristic managementCommand;
+    private BluetoothGattCharacteristic managementResponse;
+    private BluetoothGattCharacteristic commandResponse;
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic command;
     private BluetoothGattCharacteristic ssidChar;
@@ -90,6 +116,7 @@ public final class GoProBleClient {
     }
 
     private void status(String s) { main.post(() -> listener.onStatus(s)); }
+    private void diagnostic(String event) { main.post(() -> listener.onDiagnostic(event)); }
 
     public synchronized boolean isReady() { return ready; }
     public synchronized String getDeviceName() { return deviceName; }
@@ -132,6 +159,8 @@ public final class GoProBleClient {
             changed = prior == null || !prior.equals(fingerprint);
         }
         if (changed) {
+            if (match.camera) diagnostic("Camera detected: " + displayName + " (" + match.reason + ", "
+                + (rssi > -127 ? rssi + " dBm" : "bonded") + ")");
             main.post(() -> {
                 if (scanning) listener.onFound(device, displayName, match, rssi, bleTransport);
             });
@@ -188,13 +217,38 @@ public final class GoProBleClient {
             }
         };
         try {
-            scanner.startScan(null,
-                new ScanSettings.Builder()
-                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                    .setReportDelay(0)
-                    .build(),
-                scanCallback);
-            status("Searching for camera-identifying Bluetooth devices, including renamed GoPros...");
+            ScanSettings settings = new ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setReportDelay(0)
+                .build();
+            scanner.startScan(null, settings, scanCallback);
+            // Second filtered scan follows the actual GoPro-advertised 0xFEA6 service.
+            // It improves discovery while preserving the all-camera scan above.
+            priorityScanCallback = new ScanCallback() {
+                @Override public void onScanResult(int type, ScanResult result) {
+                    if (result == null || result.getDevice() == null) return;
+                    ScanRecord record = result.getScanRecord();
+                    offerDevice(result.getDevice(), record == null ? null : record.getDeviceName(),
+                        record, result.getRssi(), true);
+                }
+                @Override public void onBatchScanResults(List<ScanResult> results) {
+                    for (ScanResult result : results) onScanResult(0, result);
+                }
+                @Override public void onScanFailed(int code) {
+                    diagnostic("GoPro-specific filtered BLE scan unavailable (Android " + code
+                        + "); broad camera scan continues.");
+                }
+            };
+            try {
+                scanner.startScan(Arrays.asList(new ScanFilter.Builder()
+                    .setServiceUuid(new ParcelUuid(CMD_SERVICE)).build()),
+                    settings, priorityScanCallback);
+                diagnostic("BLE scan started, GoPro service filter FEA6 active.");
+            } catch (Exception e) {
+                diagnostic("GoPro service filter unavailable: " + e.getMessage());
+                priorityScanCallback = null;
+            }
+            status("Scanning for GoPro GP#### advertisements and other cameras...");
             scanPhaseTimeout = () -> {
                 if (scanning) {
                     stopBleOnly();
@@ -215,6 +269,10 @@ public final class GoProBleClient {
         if (scanner != null && scanCallback != null) {
             try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
         }
+        if (scanner != null && priorityScanCallback != null) {
+            try { scanner.stopScan(priorityScanCallback); } catch (Exception ignored) {}
+        }
+        priorityScanCallback = null;
         scanCallback = null;
         scanner = null;
     }
@@ -273,6 +331,8 @@ public final class GoProBleClient {
         }
         stopScan();
         final int cameraCount = cams;
+        diagnostic("Scan completed: " + cameraCount + " camera candidates, " + total
+            + " total Bluetooth devices.");
         status(cameraCount == 0
             ? "No identifiable camera found. Try 'Show unclassified devices' or verify GoPro pairing mode."
             : "Found " + cameraCount + " camera candidate(s) among " + total + " Bluetooth devices.");
@@ -296,248 +356,396 @@ public final class GoProBleClient {
     private synchronized void clearBondListener() {
         if (bondTimeout != null) main.removeCallbacks(bondTimeout);
         bondTimeout = null;
+        bondingDevice = null;
         if (bondReceiver != null) {
             try { context.unregisterReceiver(bondReceiver); } catch (Exception ignored) {}
             bondReceiver = null;
         }
-        bondingDevice = null;
+    }
+
+    private void installBondListener(BluetoothDevice device) {
+        bondingDevice = device;
+        bondReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+                BluetoothDevice changed;
+                if (Build.VERSION.SDK_INT >= 33)
+                    changed = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
+                else changed = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                if (changed == null || bondingDevice == null
+                        || !changed.getAddress().equals(bondingDevice.getAddress())) return;
+                int bond = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+                diagnostic("Android bond state: " + (bond == BluetoothDevice.BOND_BONDED
+                    ? "BONDED" : bond == BluetoothDevice.BOND_BONDING ? "BONDING" : "NOT BONDED"));
+                if (bond == BluetoothDevice.BOND_BONDED && awaitingBond) {
+                    awaitingBond = false;
+                    if (pairingFallbackTimeout != null) main.removeCallbacks(pairingFallbackTimeout);
+                    status("Bluetooth paired. Reading encrypted camera credentials...");
+                    main.postDelayed(() -> {
+                        BluetoothGatt current = gatt;
+                        if (current != null) readWifiPassword(current);
+                    }, 450);
+                } else if (bond == BluetoothDevice.BOND_NONE && awaitingBond) {
+                    awaitingBond = false;
+                    status("Android pairing was rejected. Confirm the GoPro pairing request and retry.");
+                    main.postDelayed(() -> {
+                        if (gatt != null && !ready) enableNotifications(gatt);
+                    }, 600);
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+        if (Build.VERSION.SDK_INT >= 33)
+            context.registerReceiver(bondReceiver, filter, Context.RECEIVER_EXPORTED);
+        else
+            context.registerReceiver(bondReceiver, filter);
     }
 
     public synchronized void connect(BluetoothDevice device, String name) {
         stopScan();
         disconnect();
-        deviceName = name;
         if (device == null) {
-            status("Camera is not available to connect.");
+            status("No Bluetooth device selected.");
             return;
         }
+        deviceName = name;
+        diagnostic("Opening BLE GATT connection to " + name + " (not bonding prematurely).");
         try {
-            if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
-                status("Connected camera is already paired; opening controls...");
-                connectGatt(device);
-                return;
-            }
-            bondingDevice = device;
-            bondReceiver = new BroadcastReceiver() {
-                @Override public void onReceive(Context c, Intent intent) {
-                    if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
-                    BluetoothDevice d;
-                    if (Build.VERSION.SDK_INT >= 33)
-                        d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
-                    else d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                    if (d == null || bondingDevice == null
-                            || !d.getAddress().equals(bondingDevice.getAddress())) return;
-                    int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
-                    if (state == BluetoothDevice.BOND_BONDED) {
-                        clearBondListener();
-                        status("Android Bluetooth pairing succeeded. Connecting camera controls...");
-                        connectGatt(device);
-                    } else if (state == BluetoothDevice.BOND_NONE) {
-                        clearBondListener();
-                        status("Android pairing was refused; attempting direct BLE connection.");
-                        connectGatt(device);
-                    }
-                }
-            };
-            IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
-            if (Build.VERSION.SDK_INT >= 33)
-                context.registerReceiver(bondReceiver, filter, Context.RECEIVER_EXPORTED);
-            else context.registerReceiver(bondReceiver, filter);
-            status("Pairing " + name + ". Accept the Android Bluetooth pairing prompt if it appears.");
-            if (device.getBondState() != BluetoothDevice.BOND_BONDING
-                    && !device.createBond()) {
-                clearBondListener();
-                status("Android system pairing was unavailable; trying direct GoPro BLE.");
-                connectGatt(device);
-                return;
-            }
-            bondTimeout = () -> {
-                if (bondingDevice != null) {
-                    clearBondListener();
-                    status("Pairing timed out; trying direct BLE control connection.");
-                    connectGatt(device);
-                }
-            };
-            main.postDelayed(bondTimeout, 25000);
-        } catch (Exception e) {
-            clearBondListener();
-            status("Pairing error: " + e.getMessage() + ". Trying direct BLE...");
-            connectGatt(device);
-        }
-    }
-
-    private synchronized void connectGatt(BluetoothDevice device) {
-        try {
+            installBondListener(device);
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
-            if (gatt == null) status("Android could not open a BLE GATT connection.");
+            if (gatt == null) {
+                status("Android could not start a BLE GATT connection.");
+                clearBondListener();
+                return;
+            }
+            status("Connecting to " + name + " over BLE...");
+            connectionTimeout = () -> {
+                if (!ready && gatt != null) {
+                    diagnostic("Connection timeout: no ready state after 35 seconds.");
+                    status("Connection timeout. Try reopening GoPro pairing mode and rescanning.");
+                    disconnect();
+                }
+            };
+            main.postDelayed(connectionTimeout, 35000);
         } catch (Exception e) {
-            status("BLE connection failed: " + e.getMessage());
+            status("BLE connection start failed: " + e.getMessage());
+            diagnostic("GATT connection error: " + e.getClass().getSimpleName());
+            clearBondListener();
         }
     }
 
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
-        @Override public void onConnectionStateChange(BluetoothGatt g, int statusCode, int newState) {
-            if (statusCode != BluetoothGatt.GATT_SUCCESS) {
-                status("Camera connection failed (GATT " + statusCode + ").");
-                disconnect();
+        @Override public void onConnectionStateChange(BluetoothGatt g, int code, int state) {
+            if (code != BluetoothGatt.GATT_SUCCESS) {
+                diagnostic("GATT connection failed with status " + code + ".");
+                status("Camera Bluetooth GATT error " + code + ".");
+                main.post(() -> disconnect());
                 return;
             }
-            if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
-                status("Connected over Bluetooth. Discovering controls...");
-                if (!g.discoverServices()) status("Failed to discover camera services.");
-            } else if (newState == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
-                disconnect();
-            }
-        }
-
-        @Override public void onServicesDiscovered(BluetoothGatt g, int statusCode) {
-            if (statusCode != BluetoothGatt.GATT_SUCCESS) {
-                status("Could not discover BLE camera services.");
-                return;
-            }
-            BluetoothGattService service = g.getService(CMD_SERVICE);
-            if (service == null) {
-                status("This camera does not expose the expected Open GoPro BLE service.");
-                return;
-            }
-            command = service.getCharacteristic(CMD_WRITE);
-            BluetoothGattCharacteristic response = service.getCharacteristic(CMD_RESPONSE);
-            ssidChar = service.getCharacteristic(SSID_CHARACTERISTIC);
-            passwordChar = service.getCharacteristic(PASSWORD_CHARACTERISTIC);
-            if (command == null) {
-                status("Camera control characteristic unavailable.");
-                return;
-            }
-            if (response != null) {
-                g.setCharacteristicNotification(response, true);
-                BluetoothGattDescriptor descriptor = response.getDescriptor(CCCD);
-                if (descriptor != null) {
-                    descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-                    if (g.writeDescriptor(descriptor)) return;
+            if (state == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                diagnostic("GATT connected. Discovering services...");
+                status("Bluetooth linked. Discovering GoPro services...");
+                if (!g.discoverServices()) {
+                    diagnostic("Android failed to start GATT service discovery.");
+                    status("Could not start Bluetooth service discovery.");
                 }
+            } else if (state == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
+                diagnostic("Camera disconnected Bluetooth.");
+                main.post(() -> disconnect());
             }
-            markReady();
         }
 
-        @Override public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int s) {
-            if (s != BluetoothGatt.GATT_SUCCESS) status("BLE notifications not available; controls may still work.");
-            markReady();
-        }
-
-        @Override public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int statusCode) {
-            synchronized (GoProBleClient.this) {
-                writing = false;
-                if (statusCode != BluetoothGatt.GATT_SUCCESS) {
-                    status("Camera command failed (GATT " + statusCode + ").");
-                }
-                pump();
+        @Override public void onServicesDiscovered(BluetoothGatt g, int code) {
+            if (code != BluetoothGatt.GATT_SUCCESS) {
+                diagnostic("GATT service discovery error " + code);
+                status("Camera service discovery failed (GATT " + code + ").");
+                return;
+            }
+            BluetoothGattService controlService = g.getService(CMD_SERVICE);
+            BluetoothGattService wifiService = g.getService(WIFI_AP_SERVICE);
+            BluetoothGattService manageService = g.getService(MGMT_SERVICE);
+            StringBuilder list = new StringBuilder();
+            for (BluetoothGattService service : g.getServices()) {
+                if (list.length() > 0) list.append(", ");
+                list.append(service.getUuid().toString(), 0, 8);
+            }
+            diagnostic("Discovered " + g.getServices().size() + " GATT services: " + list);
+            if (controlService == null) {
+                status("This Bluetooth device does not expose GoPro Control/Query service FEA6.");
+                diagnostic("Missing FEA6: possible non-GoPro or unsupported firmware.");
+                return;
+            }
+            command = controlService.getCharacteristic(CMD_WRITE);
+            commandResponse = controlService.getCharacteristic(CMD_RESPONSE);
+            ssidChar = wifiService == null ? null : wifiService.getCharacteristic(SSID_CHARACTERISTIC);
+            passwordChar = wifiService == null ? null : wifiService.getCharacteristic(PASSWORD_CHARACTERISTIC);
+            managementCommand = manageService == null ? null : manageService.getCharacteristic(MGMT_WRITE);
+            managementResponse = manageService == null ? null : manageService.getCharacteristic(MGMT_RESPONSE);
+            if (command == null || commandResponse == null) {
+                diagnostic("FEA6 is present but the expected 0072/0073 characteristics are missing.");
+                status("Camera has GoPro service but command characteristics are unavailable.");
+                return;
+            }
+            diagnostic("GoPro FEA6/0072/0073 controls found. Wi-Fi credential service "
+                + (wifiService == null ? "missing" : "present") + ".");
+            if (passwordChar != null
+                    && (passwordChar.getProperties() & BluetoothGattCharacteristic.PROPERTY_READ) != 0) {
+                status("Requesting encrypted Wi-Fi characteristic to initiate GoPro pairing...");
+                readWifiPassword(g);
+            } else {
+                diagnostic("No readable protected Wi-Fi password characteristic; enabling command responses.");
+                enableNotifications(g);
             }
         }
 
         @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, int code) {
-            receivedRead(g, c.getUuid(), c.getValue(), code);
+            handleRead(g, c.getUuid(), c.getValue(), code);
+        }
+        @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c,
+                                                    byte[] value, int code) {
+            handleRead(g, c.getUuid(), value, code);
         }
 
-        @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value, int code) {
-            receivedRead(g, c.getUuid(), value, code);
+        @Override public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor descriptor, int code) {
+            UUID id = descriptor.getCharacteristic().getUuid();
+            diagnostic("CCCD " + id.toString().substring(0, 8) + ": GATT " + code);
+            if (CMD_RESPONSE.equals(id) && !notifyingManagement && managementResponse != null) {
+                notifyingManagement = true;
+                if (subscribe(g, managementResponse)) return;
+            }
+            markReady();
         }
 
+        @Override public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int code) {
+            synchronized (GoProBleClient.this) {
+                writing = false;
+                if (code != BluetoothGatt.GATT_SUCCESS) {
+                    diagnostic("Characteristic " + c.getUuid().toString().substring(0, 8)
+                        + " write failed with GATT " + code);
+                    status("GoPro command write failed (GATT " + code + ").");
+                } else {
+                    diagnostic("BLE packet sent to " + c.getUuid().toString().substring(0, 8));
+                }
+                pump();
+            }
+        }
         @Override public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
-            receivedResponse(c.getValue());
+            receivedResponse(c.getUuid(), c.getValue());
         }
-        @Override public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] data) {
-            receivedResponse(data);
+        @Override public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c,
+                                                       byte[] data) {
+            receivedResponse(c.getUuid(), data);
         }
     };
 
+    private void readWifiPassword(BluetoothGatt g) {
+        try {
+            if (passwordChar != null && g.readCharacteristic(passwordChar)) {
+                diagnostic("Protected GoPro characteristic read initiated (0003).");
+                return;
+            }
+        } catch (Exception e) {
+            diagnostic("Protected characteristic read threw " + e.getClass().getSimpleName());
+        }
+        // Not all cameras expose password. The controls can still operate.
+        enableNotifications(g);
+    }
+
+    private void handleRead(BluetoothGatt g, UUID characteristic, byte[] value, int code) {
+        if (PASSWORD_CHARACTERISTIC.equals(characteristic)) {
+            if (code == BluetoothGatt.GATT_SUCCESS && value != null) {
+                password = new String(value, StandardCharsets.UTF_8).replace("\u0000", "").trim();
+                diagnostic("Encrypted GoPro credential read succeeded (password not logged).");
+                if (ssidChar != null && (ssidChar.getProperties()
+                        & BluetoothGattCharacteristic.PROPERTY_READ) != 0) {
+                    if (g.readCharacteristic(ssidChar)) return;
+                }
+                enableNotifications(g);
+                return;
+            }
+            diagnostic("Protected GoPro read returned GATT " + code + " (5/15 = authentication needed).");
+            if (code == 5 || code == 15 || code == 8) {
+                try {
+                    if (bondingDevice != null
+                            && bondingDevice.getBondState() != BluetoothDevice.BOND_BONDED) {
+                        awaitingBond = true;
+                        status("Android is pairing the GoPro. Confirm any Bluetooth prompt.");
+                        if (bondingDevice.getBondState() != BluetoothDevice.BOND_BONDING) {
+                            if (!bondingDevice.createBond())
+                                diagnostic("Android createBond declined; waiting for system authentication.");
+                        }
+                        pairingFallbackTimeout = () -> {
+                            if (awaitingBond) {
+                                awaitingBond = false;
+                                status("Pairing timed out. Trying GoPro commands in limited mode.");
+                                enableNotifications(g);
+                            }
+                        };
+                        main.postDelayed(pairingFallbackTimeout, 25000);
+                        return;
+                    }
+                } catch (Exception e) {
+                    diagnostic("Android bond request exception: " + e.getClass().getSimpleName());
+                }
+            }
+            status("Camera credentials unavailable; attempting remote control without Wi-Fi credentials.");
+            enableNotifications(g);
+        } else if (SSID_CHARACTERISTIC.equals(characteristic)) {
+            if (code == BluetoothGatt.GATT_SUCCESS && value != null) {
+                ssid = new String(value, StandardCharsets.UTF_8).replace("\u0000", "").trim();
+                diagnostic("Camera SSID read succeeded (SSID not logged).");
+            } else {
+                diagnostic("Camera SSID read failed with GATT " + code);
+            }
+            if (ssid != null && password != null && !ssid.isEmpty() && !password.isEmpty()) {
+                final String ssidValue = ssid, passwordValue = password;
+                main.post(() -> listener.onWifiCredentials(ssidValue, passwordValue));
+            }
+            enableNotifications(g);
+        }
+    }
+
+    private boolean subscribe(BluetoothGatt g, BluetoothGattCharacteristic characteristic) {
+        try {
+            if (!g.setCharacteristicNotification(characteristic, true)) {
+                diagnostic("Failed to register notification " + characteristic.getUuid());
+                return false;
+            }
+            BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD);
+            if (descriptor == null) {
+                diagnostic("CCCD missing for " + characteristic.getUuid());
+                return false;
+            }
+            byte[] val = (characteristic.getProperties()
+                    & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+                ? BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+            descriptor.setValue(val);
+            return g.writeDescriptor(descriptor);
+        } catch (Exception e) {
+            diagnostic("Notification setup error: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void enableNotifications(BluetoothGatt g) {
+        if (g == null || commandResponse == null) {
+            diagnostic("Cannot enable notifications: command response missing.");
+            return;
+        }
+        diagnostic("Enabling GoPro command response notifications (0073).");
+        if (!subscribe(g, commandResponse)) markReady();
+    }
+
     private synchronized void markReady() {
+        if (ready) return;
         ready = true;
-        status("BLE remote ready. Select your camera preset before recording.");
+        awaitingBond = false;
+        if (connectionTimeout != null) main.removeCallbacks(connectionTimeout);
+        if (pairingFallbackTimeout != null) main.removeCallbacks(pairingFallbackTimeout);
+        connectionTimeout = null;
+        pairingFallbackTimeout = null;
+        diagnostic("GoPro remote ready using FEA6 service, shutter command 0072.");
+        status("GoPro BLE ready. Try Start Shutter to test communication.");
         main.post(() -> listener.onReady(deviceName));
-        // Optional Wi-Fi credentials: not every HERO firmware exposes these.
-        if (ssidChar != null && (ssidChar.getProperties() & BluetoothGattCharacteristic.PROPERTY_READ) != 0) {
-            try { gatt.readCharacteristic(ssidChar); } catch (Exception ignored) {}
+        if (managementCommand != null) {
+            // On newer GoPros, end pairing UI using documented Wireless Management protobuf:
+            // feature 0x03, action 0x01, field1(result)=0, field2(phoneName)="FrameLink".
+            byte[] proto = new byte[] {
+                0x03,0x01,0x08,0x00,0x12,0x09,
+                'F','r','a','m','e','L','i','n','k'
+            };
+            byte[] framed = new byte[proto.length + 1];
+            framed[0] = (byte)proto.length;
+            System.arraycopy(proto, 0, framed, 1, proto.length);
+            pending.offer(new PacketToSend(managementCommand, framed));
+            diagnostic("Sending GoPro pairing-complete protobuf (00091).");
+            pump();
         }
     }
 
-    private void receivedRead(BluetoothGatt g, UUID id, byte[] value, int code) {
-        if (code == BluetoothGatt.GATT_SUCCESS && value != null) {
-            String str = new String(value, StandardCharsets.UTF_8).replace("\u0000", "").trim();
-            if (SSID_CHARACTERISTIC.equals(id)) ssid = str;
-            if (PASSWORD_CHARACTERISTIC.equals(id)) password = str;
-        }
-        if (SSID_CHARACTERISTIC.equals(id) && passwordChar != null &&
-            (passwordChar.getProperties() & BluetoothGattCharacteristic.PROPERTY_READ) != 0) {
-            try { g.readCharacteristic(passwordChar); } catch (Exception ignored) {}
-        } else if (PASSWORD_CHARACTERISTIC.equals(id) && ssid != null && password != null &&
-                   !ssid.isEmpty() && !password.isEmpty()) {
-            String s = ssid, p = password;
-            main.post(() -> listener.onWifiCredentials(s, p));
-        }
-    }
-
-    private void receivedResponse(byte[] data) {
+    private void receivedResponse(UUID characteristic, byte[] data) {
         if (data == null || data.length < 3) return;
-        // Open GoPro response packet includes length, command id and result.
-        int error = data[2] & 0xff;
-        if (error != 0 && error < 0x10) status("Camera returned status 0x" + Integer.toHexString(error) + ".");
+        // Common short response: header(length), command ID, status byte.
+        if (CMD_RESPONSE.equals(characteristic)) {
+            int commandId = data[1] & 0xff, statusByte = data[2] & 0xff;
+            diagnostic("GoPro command response: id=0x" + Integer.toHexString(commandId)
+                + ", status=0x" + Integer.toHexString(statusByte));
+            if (statusByte != 0) {
+                status("GoPro reported command error 0x" + Integer.toHexString(statusByte) + ".");
+            }
+        } else if (MGMT_RESPONSE.equals(characteristic)) {
+            diagnostic("GoPro pairing management replied (" + data.length + " bytes).");
+        }
     }
 
     public synchronized boolean setShutter(boolean on) {
-        return enqueue(new byte[] { 0x03, 0x01, 0x01, (byte) (on ? 1 : 0) });
+        return enqueue(command, new byte[] { 0x03, 0x01, 0x01, (byte) (on ? 1 : 0) });
     }
 
     public synchronized boolean enableWifi() {
-        // Open GoPro BLE AP control command.
-        return enqueue(new byte[] { 0x03, 0x17, 0x01, 0x01 });
+        return enqueue(command, new byte[] { 0x03, 0x17, 0x01, 0x01 });
     }
 
-    private boolean enqueue(byte[] data) {
-        if (!ready || gatt == null || command == null) {
-            status("Pair a GoPro over Bluetooth first.");
+    private synchronized boolean enqueue(BluetoothGattCharacteristic target, byte[] bytes) {
+        if (!ready || gatt == null || target == null) {
+            status("GoPro BLE not ready. Pair the camera first.");
             return false;
         }
-        pending.offer(data);
+        pending.offer(new PacketToSend(target, bytes));
         pump();
         return true;
     }
 
-    private void pump() {
-        if (writing || pending.isEmpty() || gatt == null || command == null) return;
-        byte[] bytes = pending.poll();
+    private synchronized void pump() {
+        if (writing || pending.isEmpty() || gatt == null) return;
+        PacketToSend p = pending.poll();
         writing = true;
         try {
-            command.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-            command.setValue(bytes);
-            if (!gatt.writeCharacteristic(command)) {
+            p.characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            p.characteristic.setValue(p.payload);
+            if (!gatt.writeCharacteristic(p.characteristic)) {
                 writing = false;
-                status("Could not send camera command.");
-                if (!pending.isEmpty()) main.postDelayed(this::retryPump, 120);
+                diagnostic("Android refused a GoPro BLE packet write.");
+                status("Bluetooth write failed to start. Retry the command.");
+                if (!pending.isEmpty()) main.postDelayed(this::pump, 200);
             }
         } catch (Exception e) {
             writing = false;
-            status("BLE write error: " + e.getMessage());
+            diagnostic("Write exception: " + e.getMessage());
+            status("Bluetooth write exception: " + e.getMessage());
         }
     }
 
-    private synchronized void retryPump() { pump(); }
-
     public synchronized void disconnect() {
-        clearBondListener();
         ready = false;
+        awaitingBond = false;
+        if (connectionTimeout != null) main.removeCallbacks(connectionTimeout);
+        if (pairingFallbackTimeout != null) main.removeCallbacks(pairingFallbackTimeout);
+        connectionTimeout = null;
+        pairingFallbackTimeout = null;
+        clearBondListener();
         writing = false;
         pending.clear();
         command = null;
+        commandResponse = null;
+        managementCommand = null;
+        managementResponse = null;
+        notifyingManagement = false;
         ssidChar = null;
         passwordChar = null;
         ssid = null;
         password = null;
-        if (gatt != null) {
-            try { gatt.disconnect(); gatt.close(); } catch (Exception ignored) {}
-            gatt = null;
+        BluetoothGatt old = gatt;
+        gatt = null;
+        if (old != null) {
+            try { old.disconnect(); old.close(); } catch (Exception ignored) {}
         }
         main.post(listener::onDisconnected);
     }
 
-    public void close() { stopScan(); disconnect(); }
+    public void close() {
+        stopScan();
+        disconnect();
+    }
 }

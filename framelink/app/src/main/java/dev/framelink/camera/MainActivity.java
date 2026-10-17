@@ -61,6 +61,7 @@ public class MainActivity extends Activity implements
     private boolean showUnclassified = false;
     private int lastScanCount = -1;
     private final ArrayList<CameraHttpClient.MediaFile> media = new ArrayList<>();
+    private final ArrayList<String> bluetoothDiagnostics = new ArrayList<>();
 
     private GoProBleClient ble;
     private CameraWifi wifi;
@@ -304,7 +305,7 @@ public class MainActivity extends Activity implements
 
         LinearLayout devices = panel();
         eyebrow(devices, "CAMERA PAIRING");
-        smallDescription(devices, "On your GoPro: Connections → Connect Device → GoPro Quik (menu varies by model).");
+        smallDescription(devices, "On your GoPro: Connections → Connect Device → GoPro Quik. The Bluetooth name may appear as GP plus four digits, even when the camera is named Moneyman.");
         smallDescription(devices, "Scan searches Bluetooth LE and classic Bluetooth for cameras from any manufacturer. Some cameras do not advertise a recognizable camera identity.");
         devices.addView(button("Scan for all cameras", true, v -> scan()), rowParams(10));
         devices.addView(button(showUnclassified ? "Hide unclassified devices" : "Show unclassified devices", false, v -> {
@@ -484,6 +485,20 @@ public class MainActivity extends Activity implements
                 updateStatus("App camera Wi-Fi request released.");
             });
         addPanel(network);
+
+        LinearLayout bluetoothLog = panel();
+        eyebrow(bluetoothLog, "BLUETOOTH CONNECTION DIAGNOSTICS");
+        smallDescription(bluetoothLog, "Live pairing and GoPro service messages. The most recent 18 steps are shown; Wi-Fi passwords are never logged.");
+        bluetoothLog.addView(button("Refresh Bluetooth diagnostics", false, v -> showTab(3)), rowParams(10));
+        if (bluetoothDiagnostics.isEmpty()) {
+            smallDescription(bluetoothLog, "No diagnostic events yet. Scan for Moneyman and attempt to pair.");
+        } else {
+            int first = Math.max(0, bluetoothDiagnostics.size() - 18);
+            for (int i = first; i < bluetoothDiagnostics.size(); i++) {
+                bluetoothLog.addView(text(bluetoothDiagnostics.get(i), 12, MUTED, false), rowParams(6));
+            }
+        }
+        addPanel(bluetoothLog);
 
         LinearLayout diagnostic = panel();
         eyebrow(diagnostic, "CONNECTION DIAGNOSTIC");
@@ -747,6 +762,15 @@ public class MainActivity extends Activity implements
         lastScanCount = totalDevices;
         if (cameras == 0) updateStatus("Found " + totalDevices + " Bluetooth devices, but none identified as cameras. Try showing unclassified devices.");
         else updateStatus("Found " + cameras + " camera candidates among " + totalDevices + " nearby Bluetooth devices.");
+    }
+
+    @Override public void onDiagnostic(String event) {
+        main.post(() -> {
+            String time = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT)
+                .format(new java.util.Date());
+            bluetoothDiagnostics.add(time + "  " + event);
+            if (bluetoothDiagnostics.size() > 120) bluetoothDiagnostics.remove(0);
+        });
     }
 
     @Override public void onReady(String name) {
