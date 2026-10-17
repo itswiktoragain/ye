@@ -56,6 +56,10 @@ public class MainActivity extends Activity implements
     private final ExecutorService jobs = Executors.newFixedThreadPool(3);
     private final LinkedHashMap<String, BluetoothDevice> found = new LinkedHashMap<>();
     private final LinkedHashMap<String, String> foundNames = new LinkedHashMap<>();
+    private final LinkedHashMap<String, CameraDiscovery.Match> foundMatches = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Integer> foundRssi = new LinkedHashMap<>();
+    private boolean showUnclassified = false;
+    private int lastScanCount = -1;
     private final ArrayList<CameraHttpClient.MediaFile> media = new ArrayList<>();
 
     private GoProBleClient ble;
@@ -81,6 +85,7 @@ public class MainActivity extends Activity implements
         getWindow().setNavigationBarColor(BG);
         getWindow().getDecorView().setSystemUiVisibility(0);
         ble = new GoProBleClient(this, this);
+        ble.setExpectedCameraName("Moneyman");
         wifi = new CameraWifi(this, this);
         api = new CameraHttpClient(this, wifi);
         createScaffold();
@@ -300,11 +305,15 @@ public class MainActivity extends Activity implements
         LinearLayout devices = panel();
         eyebrow(devices, "CAMERA PAIRING");
         smallDescription(devices, "On your GoPro: Connections → Connect Device → GoPro Quik (menu varies by model).");
-        devices.addView(button("Find nearby GoPro cameras", false, v -> scan()), rowParams(12));
+        smallDescription(devices, "Scan searches Bluetooth LE and classic Bluetooth for cameras from any manufacturer. Some cameras do not advertise a recognizable camera identity.");
+        devices.addView(button("Scan for all cameras", true, v -> scan()), rowParams(10));
+        devices.addView(button(showUnclassified ? "Hide unclassified devices" : "Show unclassified devices", false, v -> {
+            showUnclassified = !showUnclassified;
+            showTab(0);
+        }), rowParams(12));
         foundList = vertical();
         devices.addView(foundList);
-        for (Map.Entry<String, BluetoothDevice> item : found.entrySet())
-            appendFound(item.getKey(), item.getValue(), foundNames.get(item.getKey()));
+        rebuildFoundList();
         addPanel(devices);
 
         LinearLayout callout = panel();
@@ -313,10 +322,36 @@ public class MainActivity extends Activity implements
         addPanel(callout);
     }
 
-    private void appendFound(String address, BluetoothDevice device, String name) {
+    private void rebuildFoundList() {
         if (foundList == null || tab != 0) return;
-        foundList.addView(button(name + "  ·  Pair / Connect", false,
-            v -> ble.connect(device, name)), rowParams(8));
+        foundList.removeAllViews();
+        int visible = 0, cameraCount = 0;
+        for (Map.Entry<String, BluetoothDevice> entry : found.entrySet()) {
+            String address = entry.getKey();
+            CameraDiscovery.Match match = foundMatches.get(address);
+            if (match == null) continue;
+            if (match.camera) cameraCount++;
+            if (!match.camera && !showUnclassified) continue;
+            visible++;
+            String label = foundNames.get(address);
+            String info = match.reason;
+            Integer rssi = foundRssi.get(address);
+            if (rssi != null && rssi > -127) info += " · " + rssi + " dBm";
+            LinearLayout card = vertical();
+            card.setPadding(dp(10),dp(10),dp(10),dp(10));
+            card.setBackground(bg(PANEL_LIGHT, OUTLINE, 12));
+            card.addView(text(label, 14, WHITE, true), rowParams(4));
+            card.addView(text(info, 12, MUTED, false), rowParams(9));
+            card.addView(button(match.goPro ? "Pair GoPro" : "Connect / inspect camera", false,
+                v -> ble.connect(entry.getValue(), label)));
+            foundList.addView(card, rowParams(9));
+        }
+        if (visible == 0) {
+            foundList.addView(text(found.isEmpty()
+                ? "No devices discovered yet. Turn on camera pairing mode and start a scan."
+                : cameraCount == 0 ? "Bluetooth devices found, but none identify as cameras. Enable unclassified devices to inspect them."
+                : "Camera results are loading...", 12, MUTED, false));
+        }
     }
 
     private void renderMedia() {
@@ -535,7 +570,10 @@ public class MainActivity extends Activity implements
 
     private void scan() {
         found.clear();
-        if (tab == 0 && foundList != null) foundList.removeAllViews();
+        foundNames.clear();
+        foundMatches.clear();
+        foundRssi.clear();
+        rebuildFoundList();
         withPermissions(false, ble::startScan);
     }
 
@@ -695,13 +733,20 @@ public class MainActivity extends Activity implements
 
     @Override public void onStatus(String message) { updateStatus(message); }
 
-    @Override public void onFound(BluetoothDevice device, String name) {
+    @Override public void onFound(BluetoothDevice device, String name,
+            CameraDiscovery.Match match, int rssi, boolean bleTransport) {
         String address = device.getAddress();
-        if (!found.containsKey(address)) {
-            found.put(address, device);
-            foundNames.put(address, name);
-            appendFound(address, device, name);
-        }
+        found.put(address, device);
+        foundNames.put(address, name);
+        foundMatches.put(address, match);
+        foundRssi.put(address, rssi);
+        rebuildFoundList();
+    }
+
+    @Override public void onScanFinished(int totalDevices, int cameras) {
+        lastScanCount = totalDevices;
+        if (cameras == 0) updateStatus("Found " + totalDevices + " Bluetooth devices, but none identified as cameras. Try showing unclassified devices.");
+        else updateStatus("Found " + cameras + " camera candidates among " + totalDevices + " nearby Bluetooth devices.");
     }
 
     @Override public void onReady(String name) {

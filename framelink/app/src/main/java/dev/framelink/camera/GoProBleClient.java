@@ -2,6 +2,7 @@ package dev.framelink.camera;
 
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothClass;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
@@ -11,15 +12,21 @@ import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanRecord;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -31,7 +38,9 @@ import java.util.UUID;
 public final class GoProBleClient {
     public interface Listener {
         void onStatus(String status);
-        void onFound(BluetoothDevice device, String name);
+        void onFound(BluetoothDevice device, String name, CameraDiscovery.Match match,
+                     int rssi, boolean bleTransport);
+        void onScanFinished(int totalDevices, int cameras);
         void onReady(String name);
         void onWifiCredentials(String ssid, String password);
         void onDisconnected();
@@ -53,7 +62,16 @@ public final class GoProBleClient {
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ArrayDeque<byte[]> pending = new ArrayDeque<>();
-    private final Set<String> discovered = new HashSet<>();
+    private final Map<String, String> discovered = new HashMap<>();
+    private final Map<String, Boolean> cameraFlags = new HashMap<>();
+    private BluetoothAdapter adapter;
+    private BroadcastReceiver classicReceiver;
+    private BroadcastReceiver bondReceiver;
+    private Runnable scanPhaseTimeout;
+    private Runnable bondTimeout;
+    private BluetoothDevice bondingDevice;
+    private boolean scanning;
+    private String expectedAlias = "Moneyman";
     private BluetoothLeScanner scanner;
     private ScanCallback scanCallback;
     private BluetoothGatt gatt;
@@ -76,50 +94,124 @@ public final class GoProBleClient {
     public synchronized boolean isReady() { return ready; }
     public synchronized String getDeviceName() { return deviceName; }
 
+    public synchronized void setExpectedCameraName(String name) {
+        expectedAlias = name == null ? "" : name.trim();
+    }
+
+    private String nameOf(BluetoothDevice device, String provided) {
+        String name = provided;
+        if (name == null || name.trim().isEmpty()) {
+            try { name = device.getName(); } catch (Exception ignored) {}
+        }
+        return name == null ? "" : name.trim();
+    }
+
+    private void offerDevice(BluetoothDevice device, String name, ScanRecord record,
+                             int rssi, boolean bleTransport) {
+        if (!scanning || device == null) return;
+        String address;
+        try { address = device.getAddress(); } catch (Exception e) { return; }
+        if (address == null || address.isEmpty()) return;
+        String advertisedName = nameOf(device, name);
+        CameraDiscovery.Match match =
+            CameraDiscovery.classify(device, advertisedName, record, expectedAlias);
+        String displayName = advertisedName.isEmpty()
+            ? "Unnamed Bluetooth device (…" + address.substring(Math.max(0, address.length() - 5)) + ")"
+            : advertisedName;
+        String fingerprint = displayName + "|" + match.camera + "|" + match.goPro
+            + "|" + bleTransport + "|" + match.reason;
+        boolean changed;
+        synchronized (discovered) {
+            String prior = discovered.put(address, fingerprint);
+            Boolean previouslyCamera = cameraFlags.put(address, match.camera);
+            // Never demote an already positively identified camera on a later weaker advertisement.
+            if (Boolean.TRUE.equals(previouslyCamera) && !match.camera) {
+                cameraFlags.put(address, true);
+                return;
+            }
+            changed = prior == null || !prior.equals(fingerprint);
+        }
+        if (changed) {
+            main.post(() -> {
+                if (scanning) listener.onFound(device, displayName, match, rssi, bleTransport);
+            });
+        }
+    }
+
     public void startScan() {
         stopScan();
-        BluetoothManager bm = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
-        BluetoothAdapter adapter = bm == null ? null : bm.getAdapter();
+        BluetoothManager manager =
+            (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
+        adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) {
-            status("Enable Bluetooth to discover GoPro cameras.");
+            status("Enable Bluetooth, then scan again.");
             return;
         }
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
-            status("Bluetooth LE scanner unavailable.");
+            status("Cannot access BLE scanner. Check Nearby devices permission and Bluetooth.");
             return;
         }
-        discovered.clear();
-        scanCallback = new ScanCallback() {
-            @Override public void onScanResult(int callbackType, ScanResult result) {
-                BluetoothDevice d = result.getDevice();
-                if (d == null) return;
-                String name = result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
-                if (name == null) {
-                    try { name = d.getName(); } catch (SecurityException ignored) {}
-                }
-                if (name == null) return;
-                String lower = name.toLowerCase(java.util.Locale.ROOT);
-                if (!lower.contains("gopro") && !lower.startsWith("hero")) return;
-                if (discovered.add(d.getAddress())) {
-                    final String label = name;
-                    main.post(() -> listener.onFound(d, label));
-                }
+        synchronized (discovered) {
+            discovered.clear();
+            cameraFlags.clear();
+        }
+        scanning = true;
+        // Previously paired cameras may not advertise while switched on.
+        try {
+            for (BluetoothDevice device : adapter.getBondedDevices()) {
+                String n = nameOf(device, null);
+                CameraDiscovery.Match match =
+                    CameraDiscovery.classify(device, n, null, expectedAlias);
+                if (match.camera) offerDevice(device, n, null, -127, true);
             }
-            @Override public void onScanFailed(int error) { status("Camera scan failed (code " + error + ")."); }
+        } catch (Exception ignored) {}
+
+        scanCallback = new ScanCallback() {
+            @Override public void onScanResult(int type, ScanResult result) {
+                if (result == null || result.getDevice() == null) return;
+                ScanRecord rec = result.getScanRecord();
+                String name = rec == null ? null : rec.getDeviceName();
+                offerDevice(result.getDevice(), name, rec, result.getRssi(), true);
+            }
+            @Override public void onBatchScanResults(List<ScanResult> results) {
+                for (ScanResult result : results) onScanResult(0, result);
+            }
+            @Override public void onScanFailed(int error) {
+                status("BLE scan returned error " + error + ". Checking classic Bluetooth cameras...");
+                main.post(() -> {
+                    if (scanning) {
+                        stopBleOnly();
+                        beginClassicDiscovery();
+                    }
+                });
+            }
         };
         try {
             scanner.startScan(null,
-                new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(),
+                new ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    .setReportDelay(0)
+                    .build(),
                 scanCallback);
-            status("Searching for cameras in pairing mode...");
-            main.postDelayed(this::stopScan, 14000);
+            status("Searching for camera-identifying Bluetooth devices, including renamed GoPros...");
+            scanPhaseTimeout = () -> {
+                if (scanning) {
+                    stopBleOnly();
+                    beginClassicDiscovery();
+                }
+            };
+            main.postDelayed(scanPhaseTimeout, 20000);
         } catch (Exception e) {
-            status("Bluetooth scan failed: " + e.getMessage());
+            status("BLE scan failed: " + e.getMessage() + ". Trying classic Bluetooth...");
+            stopBleOnly();
+            beginClassicDiscovery();
         }
     }
 
-    public void stopScan() {
+    private void stopBleOnly() {
+        if (scanPhaseTimeout != null) main.removeCallbacks(scanPhaseTimeout);
+        scanPhaseTimeout = null;
         if (scanner != null && scanCallback != null) {
             try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
         }
@@ -127,13 +219,157 @@ public final class GoProBleClient {
         scanner = null;
     }
 
+    private void beginClassicDiscovery() {
+        if (!scanning || adapter == null) return;
+        if (classicReceiver != null) return;
+        classicReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent intent) {
+                String action = intent.getAction();
+                if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+                    BluetoothDevice device;
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        device = intent.getParcelableExtra(
+                            BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
+                    } else {
+                        device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    }
+                    if (device == null) return;
+                    String name = intent.getStringExtra(BluetoothDevice.EXTRA_NAME);
+                    int rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, (short) -127);
+                    offerDevice(device, name, null, rssi, false);
+                } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
+                    finishScan();
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(BluetoothDevice.ACTION_FOUND);
+        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
+        try {
+            if (Build.VERSION.SDK_INT >= 33)
+                context.registerReceiver(classicReceiver, filter, Context.RECEIVER_EXPORTED);
+            else context.registerReceiver(classicReceiver, filter);
+            status("Checking cameras identifiable through classic Bluetooth...");
+            boolean started = adapter.startDiscovery();
+            if (!started) {
+                status("Classic discovery unavailable; BLE results retained.");
+                finishScan();
+            } else {
+                scanPhaseTimeout = this::finishScan;
+                main.postDelayed(scanPhaseTimeout, 14000);
+            }
+        } catch (Exception e) {
+            status("Classic Bluetooth scan could not start: " + e.getMessage());
+            finishScan();
+        }
+    }
+
+    private void finishScan() {
+        if (!scanning) return;
+        int total, cams = 0;
+        synchronized (discovered) {
+            total = discovered.size();
+            for (boolean isCamera : cameraFlags.values()) if (isCamera) cams++;
+        }
+        stopScan();
+        final int cameraCount = cams;
+        status(cameraCount == 0
+            ? "No identifiable camera found. Try 'Show unclassified devices' or verify GoPro pairing mode."
+            : "Found " + cameraCount + " camera candidate(s) among " + total + " Bluetooth devices.");
+        main.post(() -> listener.onScanFinished(total, cameraCount));
+    }
+
+    public void stopScan() {
+        scanning = false;
+        stopBleOnly();
+        if (scanPhaseTimeout != null) main.removeCallbacks(scanPhaseTimeout);
+        scanPhaseTimeout = null;
+        if (classicReceiver != null) {
+            try { context.unregisterReceiver(classicReceiver); } catch (Exception ignored) {}
+            classicReceiver = null;
+        }
+        if (adapter != null) {
+            try { if (adapter.isDiscovering()) adapter.cancelDiscovery(); } catch (Exception ignored) {}
+        }
+    }
+
+    private synchronized void clearBondListener() {
+        if (bondTimeout != null) main.removeCallbacks(bondTimeout);
+        bondTimeout = null;
+        if (bondReceiver != null) {
+            try { context.unregisterReceiver(bondReceiver); } catch (Exception ignored) {}
+            bondReceiver = null;
+        }
+        bondingDevice = null;
+    }
+
     public synchronized void connect(BluetoothDevice device, String name) {
         stopScan();
         disconnect();
         deviceName = name;
-        status("Connecting to " + name + "...");
+        if (device == null) {
+            status("Camera is not available to connect.");
+            return;
+        }
+        try {
+            if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                status("Connected camera is already paired; opening controls...");
+                connectGatt(device);
+                return;
+            }
+            bondingDevice = device;
+            bondReceiver = new BroadcastReceiver() {
+                @Override public void onReceive(Context c, Intent intent) {
+                    if (!BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(intent.getAction())) return;
+                    BluetoothDevice d;
+                    if (Build.VERSION.SDK_INT >= 33)
+                        d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
+                    else d = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    if (d == null || bondingDevice == null
+                            || !d.getAddress().equals(bondingDevice.getAddress())) return;
+                    int state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+                    if (state == BluetoothDevice.BOND_BONDED) {
+                        clearBondListener();
+                        status("Android Bluetooth pairing succeeded. Connecting camera controls...");
+                        connectGatt(device);
+                    } else if (state == BluetoothDevice.BOND_NONE) {
+                        clearBondListener();
+                        status("Android pairing was refused; attempting direct BLE connection.");
+                        connectGatt(device);
+                    }
+                }
+            };
+            IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED);
+            if (Build.VERSION.SDK_INT >= 33)
+                context.registerReceiver(bondReceiver, filter, Context.RECEIVER_EXPORTED);
+            else context.registerReceiver(bondReceiver, filter);
+            status("Pairing " + name + ". Accept the Android Bluetooth pairing prompt if it appears.");
+            if (device.getBondState() != BluetoothDevice.BOND_BONDING
+                    && !device.createBond()) {
+                clearBondListener();
+                status("Android system pairing was unavailable; trying direct GoPro BLE.");
+                connectGatt(device);
+                return;
+            }
+            bondTimeout = () -> {
+                if (bondingDevice != null) {
+                    clearBondListener();
+                    status("Pairing timed out; trying direct BLE control connection.");
+                    connectGatt(device);
+                }
+            };
+            main.postDelayed(bondTimeout, 25000);
+        } catch (Exception e) {
+            clearBondListener();
+            status("Pairing error: " + e.getMessage() + ". Trying direct BLE...");
+            connectGatt(device);
+        }
+    }
+
+    private synchronized void connectGatt(BluetoothDevice device) {
         try {
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
+            if (gatt == null) status("Android could not open a BLE GATT connection.");
         } catch (Exception e) {
             status("BLE connection failed: " + e.getMessage());
         }
@@ -287,6 +523,7 @@ public final class GoProBleClient {
     private synchronized void retryPump() { pump(); }
 
     public synchronized void disconnect() {
+        clearBondListener();
         ready = false;
         writing = false;
         pending.clear();
