@@ -1,42 +1,68 @@
-# Windows 2000 AMD64 community prototype builder
+# W2K64 AMD64 community prototype - boot preservation fix
 
-This project creates a **complete bootable BIOS ISO** from **your own Windows XP Professional x64 AMD64 ISO and Windows 2000 Professional ISO**. The final ISO is split into 64 MiB parts and also packed into a TAR.XZ. The original XP x64 kernel and WOW64 installer binaries stay unchanged.
+**October 19, 2026:** The old nine-part W2K64_AMD64_Complete.zip archive was reported NOT BOOTING. An intact ZIP and a valid El Torito catalog do not prove that Windows Setup will start. Do not consider the old archive boot-tested.
 
-**It is NOT an actual NT 5.0 / Windows 2000 x64 port.** The running OS is XP Professional x64, NT 5.2. This also does **not** enable native 16-bit programs. Those need a separate emulator or an x86 Windows VM. Boot and About branding is additional artwork / a separate About utility, not replacements for Windows' actual boot or winver dialog.
+The original script rebuilt the whole ISO filesystem with libarchive, potentially altering the filenames/layout that older Windows loaders need. The replacement build.py now uses xorriso to import your ORIGINAL XP x64 ISO, inserts prototype extras in a separate /W2K64 folder, and performs '-boot_image any replay'. It checks the original El Torito BIOS boot image and all original installation file bytes. It ABORTS if the verification fails.
 
-## Ubuntu build
+GitHub Actions includes a small open-source bootloader smoke test of this preservation technique. This is NOT yet a successful XP x64 installer test.
 
-```bash
+This remains Windows XP Professional AMD64 (NT 5.2) at its core, not a genuine Windows 2000 NT 5.0 x64 port. XP x64's native WOW64 supports 32-bit applications but does not supply NTVDM or native DOS/Win16 support. The graphics and standalone About app are prototypes and are not automatically wired into the system boot image or winver.
+
+## Ubuntu build from your two-part 7z
+
+Both the 001 and 002 parts must be in Downloads:
+
+~~~bash
 sudo apt update
-sudo apt install -y python3 python3-pil gcc libarchive-dev mingw-w64 p7zip-full cabextract git
+sudo apt install -y git python3 python3-pil fonts-dejavu-core mingw-w64 p7zip-full xorriso qemu-system-x86 qemu-utils
 git clone https://github.com/itswiktoragain/ye.git
 cd ye/w2k64-amd64
+
 python3 build.py \
   --xp-7z "$HOME/Downloads/Windows XP Pro x64 English.7z.001" \
   --win2000-iso "$HOME/Downloads/Windows 2000 Professional.ISO" \
-  --output "$HOME/Downloads/W2K64_output"
-```
+  --output "$HOME/Downloads/W2K64_FIXED"
+~~~
 
-Keep the `.7z.001` and `.7z.002` files in the same folder. If you already extracted the XP x64 ISO, replace `--xp-7z ...` with `--xp-iso "/path/to/xp-x64.iso"`.
+If already cloned:
 
-All output goes in `~/Downloads/W2K64_output/`:
-- `W2K64_AMD64_Community_Prototype.iso` — the complete ISO
-- `W2K64_AMD64_Community_Prototype.tar.xz` — full ISO in a TAR.XZ
-- `W2K64_AMD64_Community_Prototype.tar.xz.part00`, `part01` etc. — sequential, up-to-64-MiB chunks
-- `SHA256SUMS.txt` — hashes for integrity checks
+~~~bash
+cd ~/ye && git pull
+cd w2k64-amd64
+~~~
 
-To reassemble parts downloaded from GitHub artifacts or copied separately:
+If you already extracted XP x64 to an ISO, use --xp-iso /path/to/original.iso instead of --xp-7z.
 
-```bash
-cat W2K64_AMD64_Community_Prototype.tar.xz.part[0-9][0-9] > W2K64_AMD64_Community_Prototype.tar.xz
-tar -xJf W2K64_AMD64_Community_Prototype.tar.xz
-sha256sum -c SHA256SUMS.txt
-```
+The generated ISO is W2K64_AMD64_Community_Prototype_FIXED.iso. By default the builder also creates a complete .tar.xz, 64MiB numbered parts, and SHA256SUMS.txt. Add --no-archive for a quick ISO-only diagnostic run.
 
-Note: `sha256sum -c` checks all files listed; if you only transferred parts, check after reconstructing or use the specific entry from the sums file.
+Reassemble numbered parts if needed:
 
-## GitHub delivery limitations
+~~~bash
+cat W2K64_AMD64_Community_Prototype_FIXED.tar.xz.part[0-9][0-9] \
+  > W2K64_AMD64_Community_Prototype_FIXED.tar.xz
+tar -xJf W2K64_AMD64_Community_Prototype_FIXED.tar.xz
+~~~
 
-The connected GitHub API cannot upload binary files located in the assistant container directly as large release assets, and this **public repository must not contain copyrighted Windows installer binaries or ISOs**. This repository contains build source only. To distribute build results in GitHub, do so using a repository/private upload or a runner under your control, rather than putting ISO parts into the public source repository.
+## QEMU test - use legacy BIOS
 
-Test the image in an isolated VM using legacy BIOS boot before real hardware. Windows XP x64 is unsupported and insecure online.
+First test the ORIGINAL XP x64 ISO with the same settings. If it does not boot, an ISO repack alone cannot fix the VM incompatibility.
+
+~~~bash
+qemu-img create -f qcow2 "$HOME/Downloads/w2k64-test.qcow2" 20G
+qemu-system-x86_64 -M pc -m 2048 -smp 2 -cpu qemu64 \
+  -drive file="$HOME/Downloads/w2k64-test.qcow2",format=qcow2,if=ide \
+  -cdrom "$HOME/Downloads/W2K64_FIXED/W2K64_AMD64_Community_Prototype_FIXED.iso" \
+  -boot order=d -net none
+~~~
+
+The virtual CD must be first in boot order; press a key if it says to boot from CD. Use SeaBIOS (legacy BIOS), not UEFI-only OVMF. Avoid AHCI, NVMe or VirtIO disks until storage drivers are supplied. If a STOP 0x000000A5 blue screen appears *after Setup starts*, investigate XP x64 ACPI incompatibility instead of the boot record.
+
+Inspect the image's boot catalog:
+
+~~~bash
+xorriso -indev "$HOME/Downloads/W2K64_FIXED/W2K64_AMD64_Community_Prototype_FIXED.iso" -report_el_torito plain
+~~~
+
+The standalone boot replay smoke test is at w2k64-amd64/tests/boot_replay.sh and runs through .github/workflows/w2k64-boot-smoke.yml. It proves only that an elementary BIOS test image survives the media-replay process, not that proprietary XP installation media has successfully booted.
+
+Never install this experimental, obsolete Windows image on an important disk. Use an offline disposable VM first.
