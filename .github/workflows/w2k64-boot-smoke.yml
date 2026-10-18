@@ -1,0 +1,19 @@
+name: W2K64 boot replay smoke test
+on:
+  push:
+    paths:
+      - 'w2k64-amd64/**'
+      - '.github/workflows/w2k64-boot-smoke.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bios-boot-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ISO and emulation tools
+        run: sudo apt-get update && sudo apt-get install -y xorriso nasm qemu-system-x86
+      - name: Create two test ISOs and boot the replayed one in BIOS mode
+        run: bash w2k64-amd64/tests/boot_replay.sh
